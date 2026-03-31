@@ -345,16 +345,16 @@ checkout is guaranteed under all outcomes.
 
 ### Tasks
 
-**4.1 — Deferred work infrastructure**
-- Add `uint32_t in_callback` and `uint32_t deferred_work` fields to
+**4.1 — Deferred work infrastructure** ✓ DONE
+- [x] Add `uint32_t in_callback` and `uint32_t deferred_work` fields to
   `braid_pool_t` in `src/braid_internal.h`
-- Define `BRAID_DEFERRED_SERVE_WAITQUEUE` and `BRAID_DEFERRED_PROCESS_DEAD`
+- [x] Define `BRAID_DEFERRED_SERVE_WAITQUEUE` and `BRAID_DEFERRED_PROCESS_DEAD`
   flag constants
-- Implement `braid_pool_drain_deferred(pool)` stub in `src/braid_pool.c`:
+- [x] Implement `braid_pool_drain_deferred(pool)` stub in `src/braid_pool.c`:
   processes `BRAID_DEFERRED_PROCESS_DEAD` first (no-op in this phase),
   then `BRAID_DEFERRED_SERVE_WAITQUEUE` (no-op in this phase). Full
   implementation in Phase 6. See ARCHITECTURE.md §9.2.
-- The `in_callback` increment/decrement/drain pattern must be in place and
+- [x] The `in_callback` increment/decrement/drain pattern must be in place and
   tested before wait queue logic is wired into the pool in Phase 6.
 
 **4.2 — `braid_waiter_t` and ring buffer definition**
