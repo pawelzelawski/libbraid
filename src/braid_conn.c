@@ -346,14 +346,17 @@ conn_keepalive_configure(int fd, const braid_config_t *config)
  * the fd for writability and waits for connect completion via epoll/kqueue.
  *
  * Returns BRAID_OK and writes the fd to *fd_out on success (including
- * EINPROGRESS). Returns BRAID_ERR_SYSCALL and closes the fd on failure.
+ * EINPROGRESS). Sets *immediate_out to 1 if connect() returned 0 (fast
+ * local connect), 0 if EINPROGRESS. Returns BRAID_ERR_SYSCALL on failure.
  * See ARCHITECTURE.md §6.3, §5.
  */
 int
-conn_socket_create(braid_pool_t *pool, struct addrinfo *ai, int *fd_out)
+conn_socket_create(braid_pool_t *pool, struct addrinfo *ai, int *fd_out,
+		   int *immediate_out)
 {
 	int fd;
 	int flags;
+	int connect_rc;
 
 	fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	if (fd == -1)
@@ -386,14 +389,16 @@ conn_socket_create(braid_pool_t *pool, struct addrinfo *ai, int *fd_out)
 		goto fail;
 
 	/*
-	 * Non-blocking connect(). EINPROGRESS is the expected outcome —
-	 * the caller watches for writability and calls getsockopt(SO_ERROR)
-	 * on the writable event. Any other errno is a hard failure.
+	 * Non-blocking connect(). A return value of 0 indicates immediate
+	 * connection (common on loopback). EINPROGRESS is the expected outcome
+	 * for remote hosts — the caller watches for writability and calls
+	 * getsockopt(SO_ERROR). Any other errno is a hard failure.
 	 */
-	if (connect(fd, ai->ai_addr, ai->ai_addrlen) == -1 &&
-	    errno != EINPROGRESS)
+	connect_rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+	if (connect_rc == -1 && errno != EINPROGRESS)
 		goto fail;
 
+	*immediate_out = (connect_rc == 0);
 	*fd_out = fd;
 	return BRAID_OK;
 

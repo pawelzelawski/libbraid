@@ -15,6 +15,7 @@
 #include "../include/braid.h"
 #include "../src/braid_internal.h"
 #include "../src/braid_reconnect.h"
+#include "../src/braid_table.h"
 #include "test_harness.h"
 
 /* ── heap helpers ────────────────────────────────────────────────────── */
@@ -232,7 +233,7 @@ test_heap_clear_resets_count(void)
 	free_heap(heap);
 }
 
-/* ── test suite entry point ──────────────────────────────────────────── */
+/* ── backoff test cases ──────────────────────────────────────────────── */
 
 /*
  * attempt=0 → exp=0, window = backoff_base × 1 = 100.
@@ -381,6 +382,239 @@ test_backoff_cap_respected(void)
 	free(pool);
 }
 
+/* ── reconnect_advance test infrastructure ───────────────────────────── */
+
+static int g_reconnect_event_count;
+static braid_event_t g_last_reconnect_event;
+
+static void
+cb_reconnect_observe(const braid_event_t *ev, void *hook)
+{
+	(void)hook;
+	g_reconnect_event_count++;
+	g_last_reconnect_event = *ev;
+}
+
+static void
+reset_reconnect_counters(void)
+{
+	g_reconnect_event_count = 0;
+	memset(&g_last_reconnect_event, 0, sizeof(g_last_reconnect_event));
+}
+
+/*
+ * make_testpool — allocate a pool suitable for reconnect_advance tests.
+ *
+ * Initialises pool->config, the reconnection heap (cap = max_connections),
+ * and the connection hash table. The prng is seeded to a non-zero value.
+ * Caller must free with free_testpool().
+ */
+static braid_pool_t *
+make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
+	      uint16_t port, braid_observe_fn observe_fn)
+{
+	braid_pool_t *pool;
+
+	pool = calloc(1, sizeof(*pool));
+	if (pool == NULL)
+		return NULL;
+
+	pool->config.max_connections = max_connections;
+	pool->config.min_connections = 0;
+	pool->config.backoff_max_attempts = max_attempts;
+	pool->config.host = host;
+	pool->config.port = port;
+	pool->config.backoff_base = 100;
+	pool->config.backoff_cap = 30000;
+	pool->config.observe_fn = observe_fn;
+	pool->prng = 0xdeadbeefcafeULL;
+
+	if (reconnect_heap_init(&pool->reconnect, max_connections) !=
+	    BRAID_OK) {
+		free(pool);
+		return NULL;
+	}
+	if (table_init(pool) != BRAID_OK) {
+		reconnect_heap_destroy(&pool->reconnect);
+		free(pool);
+		return NULL;
+	}
+	return pool;
+}
+
+static void
+free_testpool(braid_pool_t *pool)
+{
+	table_destroy(pool);
+	reconnect_heap_destroy(&pool->reconnect);
+	free(pool);
+}
+
+/* ── reconnect_advance test cases ────────────────────────────────────── */
+
+/*
+ * max_attempts = N: when entry.attempt == N the engine must not re-insert
+ * the entry and must fire BRAID_EV_RECONNECT_ATTEMPT with success=0.
+ * No DNS resolution or socket creation occurs on this path.
+ */
+static void
+test_max_attempts_N_stops(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	reset_reconnect_counters();
+	pool = make_testpool(8, 3, "127.0.0.1", 1, cb_reconnect_observe);
+	if (pool == NULL) {
+		CHECK("max_attempts_N_stops: alloc", 0);
+		return;
+	}
+	entry.attempt = 3; /* at cap — must not retry */
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("max_attempts_N_stops: heap empty (not re-inserted)",
+	      pool->reconnect.count == 0);
+	CHECK("max_attempts_N_stops: event fired",
+	      g_reconnect_event_count == 1);
+	CHECK("max_attempts_N_stops: event type",
+	      g_last_reconnect_event.type == BRAID_EV_RECONNECT_ATTEMPT);
+	CHECK("max_attempts_N_stops: event attempt==3",
+	      g_last_reconnect_event.reconnect_attempt.attempt == 3);
+	CHECK("max_attempts_N_stops: event success==0",
+	      g_last_reconnect_event.reconnect_attempt.success == 0);
+
+	free_testpool(pool);
+}
+
+/*
+ * max_attempts = 0 means retry forever: even at attempt=50 the engine must
+ * not invoke the max_attempts check and must re-insert the entry on failure.
+ *
+ * The test uses an RFC 2606 .invalid hostname which is guaranteed to never
+ * resolve. getaddrinfo() returns EAI_NONAME immediately on any compliant
+ * resolver (systemd-resolved returns it without a network round-trip).
+ * The DNS-failure path schedules a retry without opening a socket, so there
+ * is no fd leak regardless of the system's network state.
+ */
+static void
+test_max_attempts_zero_retries_forever(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	pool = make_testpool(8, 0, "braid-test-unresolvable.invalid", 1, NULL);
+	if (pool == NULL) {
+		CHECK("max_attempts_zero: alloc", 0);
+		return;
+	}
+	entry.attempt = 50; /* well above any reasonable limit; must not stop */
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	/* DNS failure path re-inserts entry; max_attempts=0 never stops it. */
+	CHECK("max_attempts_zero: entry re-inserted (retry forever)",
+	      pool->reconnect.count > 0);
+
+	free_testpool(pool);
+}
+
+/*
+ * Entries with next_retry_ms <= now_ms must be popped and processed.
+ * Using max_attempts=1 / attempt=1 triggers the no-insert code path so
+ * the heap is left empty — proving the entry was consumed.
+ */
+static void
+test_reconnect_advance_fires_due(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	reset_reconnect_counters();
+	pool = make_testpool(8, 1, "127.0.0.1", 1, cb_reconnect_observe);
+	if (pool == NULL) {
+		CHECK("advance_fires_due: alloc", 0);
+		return;
+	}
+	entry.attempt = 1; /* at max_attempts → max_attempts check fires */
+	entry.next_retry_ms = 500;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	CHECK("advance_fires_due: count == 1 before",
+	      pool->reconnect.count == 1);
+	reconnect_advance(pool, 1000); /* 1000 >= 500 → entry is due */
+	CHECK("advance_fires_due: count == 0 after (entry consumed)",
+	      pool->reconnect.count == 0);
+
+	free_testpool(pool);
+}
+
+/*
+ * Entries with next_retry_ms > now_ms must not be processed.
+ * After advance the count must remain 1.
+ */
+static void
+test_reconnect_advance_skips_future(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	pool = make_testpool(8, 1, "127.0.0.1", 1, NULL);
+	if (pool == NULL) {
+		CHECK("advance_skips_future: alloc", 0);
+		return;
+	}
+	entry.attempt = 0;
+	entry.next_retry_ms = 999999; /* far in the future */
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000); /* 1000 < 999999 → skip */
+
+	CHECK("advance_skips_future: count == 1 (entry not consumed)",
+	      pool->reconnect.count == 1);
+
+	free_testpool(pool);
+}
+
+/*
+ * observe_fn must be invoked with BRAID_EV_RECONNECT_ATTEMPT carrying the
+ * correct attempt number. The max_attempts path is used to keep the test
+ * deterministic without a real network call.
+ */
+static void
+test_reconnect_attempt_event_fired(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	reset_reconnect_counters();
+	pool = make_testpool(8, 5, "127.0.0.1", 1, cb_reconnect_observe);
+	if (pool == NULL) {
+		CHECK("attempt_event_fired: alloc", 0);
+		return;
+	}
+	entry.attempt = 5; /* at max_attempts=5 → max_attempts check fires */
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("attempt_event_fired: observe_fn called",
+	      g_reconnect_event_count == 1);
+	CHECK("attempt_event_fired: event type == RECONNECT_ATTEMPT",
+	      g_last_reconnect_event.type == BRAID_EV_RECONNECT_ATTEMPT);
+	CHECK("attempt_event_fired: attempt number == 5",
+	      g_last_reconnect_event.reconnect_attempt.attempt == 5);
+	CHECK("attempt_event_fired: success == 0",
+	      g_last_reconnect_event.reconnect_attempt.success == 0);
+
+	free_testpool(pool);
+}
+
 /* ── test suite entry point ──────────────────────────────────────────── */
 
 void
@@ -396,4 +630,9 @@ run_reconnect_tests(void)
 	test_backoff_attempt_31();
 	test_backoff_attempt_64();
 	test_backoff_cap_respected();
+	test_max_attempts_N_stops();
+	test_max_attempts_zero_retries_forever();
+	test_reconnect_advance_fires_due();
+	test_reconnect_advance_skips_future();
+	test_reconnect_attempt_event_fired();
 }

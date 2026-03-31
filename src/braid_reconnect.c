@@ -5,17 +5,24 @@
  * See ARCHITECTURE.md §6.
  */
 
+#include <netdb.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../include/braid.h"
+#include "braid_conn.h"
 #include "braid_internal.h"
+#include "braid_io.h"
+#include "braid_pool.h"
 #include "braid_reconnect.h"
 
 /* Default backoff values — applied when config fields are zero. */
 #define BRAID_DEFAULT_BACKOFF_BASE 100 /* milliseconds */
 #define BRAID_DEFAULT_BACKOFF_CAP 30000 /* milliseconds */
+#define BRAID_DEFAULT_INIT_TIMEOUT 10000 /* milliseconds */
 
 /* ── PRNG helpers ─────────────────────────────────────────────────────── */
 
@@ -250,13 +257,190 @@ reconnect_backoff_delay(braid_pool_t *pool, uint32_t attempt)
 }
 
 /*
- * reconnect_advance — process due reconnection entries.
- * Stub — full implementation in Phase 5 Task 5.3.
+ * reconnect_fire_event — dispatch BRAID_EV_RECONNECT_ATTEMPT via observe_fn.
+ *
+ * Uses the in_callback protocol so that re-entrant checkin during observe_fn
+ * sees in_callback > 0 and defers correctly. No-op if observe_fn is NULL.
+ * fd is -1 on failure paths where no connection record was created.
+ */
+static void
+reconnect_fire_event(braid_pool_t *pool, int fd, uint32_t attempt, int success)
+{
+	braid_event_t ev;
+
+	if (pool->config.observe_fn == NULL)
+		return;
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = BRAID_EV_RECONNECT_ATTEMPT;
+	ev.fd = fd;
+	ev.reconnect_attempt.attempt = attempt;
+	ev.reconnect_attempt.success = success;
+
+	pool->in_callback++;
+	pool->config.observe_fn(&ev, pool->config.hook_context);
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
+}
+
+/*
+ * reconnect_schedule_retry — push a new reconnect entry for attempt+1.
+ *
+ * The next deadline is now + backoff_delay(attempt+1). When the heap is
+ * full (BRAID_ERR_EXHAUSTED), the entry is silently dropped — a full heap
+ * means max_connections reconnects are already queued; the new failure
+ * is not an additional concern.
+ */
+static void
+reconnect_schedule_retry(braid_pool_t *pool, uint32_t attempt)
+{
+	braid_reconnect_entry_t next;
+
+	next.attempt = attempt + 1;
+	next.next_retry_ms =
+	    braid_now_ms() + reconnect_backoff_delay(pool, attempt + 1);
+	reconnect_heap_push(&pool->reconnect,
+			    next); /* EXHAUSTED: best effort */
+}
+
+/*
+ * reconnect_attempt — perform one reconnection attempt for the given entry.
+ *
+ * Flow per ARCHITECTURE.md §6.3:
+ *   1. max_attempts check: fire failure event and return (no re-insert).
+ *   2. DNS: getaddrinfo(). On failure, schedule retry; no event.
+ *   3. Socket creation + non-blocking connect().
+ *      On failure (errno != EINPROGRESS), schedule retry; fire failure event.
+ *   4. conn_alloc() for the new fd. On failure, close fd; schedule retry.
+ *   5a. Immediate connect (connect()==0): CONNECTING→INITIALIZING, call
+ *       init_fn if set, then INITIALIZING→IDLE. Register for reads.
+ *       On init_fn failure: INITIALIZING→DEAD, schedule retry, fire failure.
+ *   5b. EINPROGRESS: fd already in CONNECTING (via conn_alloc); register
+ *       for writability. Connect completion handled in braid_pool_notify.
+ *   6. Fire success event.
+ *
+ * No reconnect entry is inserted on the success path; one is inserted only
+ * on failure (DNS fail, connect error, init_fn fail). See ARCHITECTURE.md §6.
+ */
+static int
+reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
+{
+	struct addrinfo hints, *res;
+	char port_str[6]; /* max "65535\0" */
+	braid_conn_t *conn;
+	int fd, rc, immediate;
+
+	/* Step 1: max_attempts check — stops retrying when limit reached. */
+	if (pool->config.backoff_max_attempts > 0 &&
+	    entry.attempt >= pool->config.backoff_max_attempts) {
+		reconnect_fire_event(pool, -1, entry.attempt, 0);
+		return BRAID_OK;
+	}
+
+	/* Step 2: DNS resolution — fresh on every attempt for DNS failover. */
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	snprintf(port_str, sizeof(port_str), "%u", (unsigned)pool->config.port);
+	if (getaddrinfo(pool->config.host, port_str, &hints, &res) != 0) {
+		reconnect_schedule_retry(pool, entry.attempt);
+		return BRAID_OK;
+	}
+
+	/* Step 3: create socket, apply keepalive, non-blocking connect. */
+	rc = conn_socket_create(pool, res, &fd, &immediate);
+	freeaddrinfo(res);
+	if (rc != BRAID_OK) {
+		reconnect_schedule_retry(pool, entry.attempt);
+		reconnect_fire_event(pool, -1, entry.attempt, 0);
+		return BRAID_OK;
+	}
+
+	/* Step 4: allocate connection record (bootstraps CONNECTING state). */
+	rc = conn_alloc(pool, fd, &conn);
+	if (rc != BRAID_OK) {
+		close(fd);
+		reconnect_schedule_retry(pool, entry.attempt);
+		return BRAID_OK;
+	}
+
+	if (immediate) {
+		/*
+		 * Step 5a: connect() returned 0 — no writable-event wait.
+		 * Transition directly to INITIALIZING and run init_fn inline.
+		 */
+		conn_transition(pool, conn, BRAID_STATE_INITIALIZING);
+
+		if (pool->config.init_fn != NULL) {
+			uint32_t timeout;
+			uint64_t deadline;
+			int init_rc;
+
+			timeout = pool->config.init_timeout != 0
+				      ? pool->config.init_timeout
+				      : BRAID_DEFAULT_INIT_TIMEOUT;
+			deadline = braid_now_ms() + (uint64_t)timeout;
+			pool->in_callback++;
+			init_rc = pool->config.init_fn(
+			    fd, &conn->conn_ctx, pool->config.hook_context,
+			    deadline);
+			pool->in_callback--;
+			if (pool->in_callback == 0 && pool->deferred_work != 0)
+				pool_drain_deferred(pool);
+
+			if (init_rc != BRAID_OK) {
+				conn_transition(pool, conn, BRAID_STATE_DEAD);
+				reconnect_schedule_retry(pool, entry.attempt);
+				reconnect_fire_event(pool, -1, entry.attempt,
+						     0);
+				return BRAID_OK;
+			}
+		}
+
+		conn_transition(pool, conn, BRAID_STATE_IDLE);
+		io_watch(pool, fd, BRAID_IO_READ);
+	} else {
+		/*
+		 * Step 5b: EINPROGRESS — conn already in CONNECTING state
+		 * (set by conn_alloc). Register for writability; connect
+		 * completion is signalled via braid_pool_notify() (Phase 6).
+		 */
+		io_watch(pool, fd, BRAID_IO_WRITE);
+	}
+
+	/* Step 6: fire success event (attempt in progress or completed). */
+	reconnect_fire_event(pool, fd, entry.attempt, 1);
+	return BRAID_OK;
+}
+
+/*
+ * reconnect_advance — process all due reconnection heap entries.
+ *
+ * Pops entries with next_retry_ms <= now_ms and calls reconnect_attempt()
+ * for each. Stops when the heap minimum is in the future or empty.
+ *
+ * The loop is bounded by the entry count at call entry (limit). Without
+ * this bound, a failed attempt that re-inserts with delay=0 would cause
+ * the same entry to be processed again within the same advance call.
+ * Entries re-inserted this call are deferred to the next invocation.
+ * See ARCHITECTURE.md §6.3.
  */
 int
 reconnect_advance(braid_pool_t *pool, uint64_t now_ms)
 {
-	(void)pool;
-	(void)now_ms;
+	braid_reconnect_entry_t entry;
+	uint32_t limit;
+
+	limit = pool->reconnect.count;
+
+	while (limit-- > 0) {
+		if (reconnect_heap_peek(&pool->reconnect, &entry) != BRAID_OK)
+			break;
+		if (entry.next_retry_ms > now_ms)
+			break;
+		reconnect_heap_pop(&pool->reconnect, &entry);
+		reconnect_attempt(pool, entry);
+	}
 	return BRAID_OK;
 }

@@ -458,8 +458,8 @@ reaper respects the `min_connections` floor. Both components drive
   See ARCHITECTURE.md §6.2. Apply default values when config fields are
   zero per ARCHITECTURE.md §16.
 
-**5.3 — Reconnection attempt flow**
-- Implement `reconnect_attempt(pool, entry)` per ARCHITECTURE.md §6.3:
+**5.3 — Reconnection attempt flow** ✓ DONE
+- [x] Implement `reconnect_attempt(pool, entry)` per ARCHITECTURE.md §6.3:
   1. Call `getaddrinfo()` on `pool->config.host`. On failure: insert
      reconnect entry for `attempt+1` with backoff delay; return.
   2. Call `conn_socket_create()` (socket + fcntl + keepalive + connect).
@@ -475,7 +475,7 @@ reaper respects the `min_connections` floor. Both components drive
   entries are inserted only on failure paths or on CONNECTING→DEAD
   transition (see §4.3). If the attempt succeeds, no follow-up entry
   is inserted.
-- Implement `reconnect_advance(pool, now_ms)`: pop all entries with
+- [x] Implement `reconnect_advance(pool, now_ms)`: pop all entries with
   `next_retry_ms <= now_ms`; call `reconnect_attempt()` for each;
   skip and fire failure event if `max_attempts > 0` and
   `entry.attempt >= max_attempts`
