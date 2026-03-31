@@ -3,8 +3,8 @@
 ## Status Overview
 
 **Last Updated**: 2026-03-31
-**Current Phase**: Phase 3 complete
-**Next Task**: Phase 4 — Wait Queue (task 4.1)
+**Current Phase**: Phase 4 complete
+**Next Task**: Phase 5 — Reconnection Engine and Idle Reaper
 
 ### Phase Summary
 
@@ -13,7 +13,7 @@
 | 1 | Foundation | COMPLETE | ✓ | Build system, test harness, mock clock, skeleton |
 | 2 | Connection Table | COMPLETE | ✓ | Hash table, open addressing, tombstone, compaction |
 | 3 | Connection State Machine | COMPLETE | ✓ | conn_transition, record lifecycle, keepalive, socket creation |
-| 4 | Wait Queue | NOT STARTED | — | Ring buffer, cancel, timeout expiry, deferred work flags |
+| 4 | Wait Queue | COMPLETE | ✓ | Ring buffer, cancel, timeout expiry, deferred work flags |
 | 5 | Reconnection Engine and Idle Reaper | NOT STARTED | — | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | NOT STARTED | — | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | NOT STARTED | — | kqueue translation unit, all tests on OpenBSD |
@@ -34,7 +34,7 @@
 | M9 | clang-tidy zero warnings | NOT STARTED |
 | M10 | Hash table lookup correct under collision — verified by test | DONE |
 | M11 | State machine rejects all illegal transitions — verified by test | NOT STARTED |
-| M12 | One callback per checkout guaranteed — verified by test | NOT STARTED |
+| M12 | One callback per checkout guaranteed — verified by test | DONE |
 | M13 | Backoff exponent overflow guard verified by test | NOT STARTED |
 | M14 | Reaper min_connections floor verified by test | NOT STARTED |
 | M15 | Re-entrancy: checkin from checkout callback safe — verified by test | NOT STARTED |
@@ -389,26 +389,26 @@ checkout is guaranteed under all outcomes.
   invoke all non-tombstone entries with `BRAID_ERR_SHUTDOWN` (tombstone
   before callback); reset count to 0; advance head to tail
 
-**4.4 — Tests (`tests/test_wait_queue.c`)**
-- Implement all test cases from TESTING.md §3.3:
+**4.4 — Tests (`tests/test_wait_queue.c`)** ✓ DONE
+- [x] Implement all test cases from TESTING.md §3.3:
   `test_enqueue_dequeue_fifo`, `test_tombstone_skip_on_dequeue`,
   `test_cancel_by_token`, `test_cancel_already_served_noop`,
   `test_timeout_expiry_scan`, `test_expiry_stops_at_first_nonfired`,
   `test_shutdown_drains_all`, `test_one_callback_cancel_after_serve`,
   `test_one_callback_timeout_after_cancel`,
   `test_ring_wraparound`, `test_full_ring_rejects_enqueue`
-- All timer-dependent tests use `braid_test_clock_ms` — no `sleep()`
-- Register all tests in `run_tests.c`
+- [x] All timer-dependent tests use `braid_test_clock_ms` — no `sleep()`
+- [x] Register all tests in `run_tests.c`
 
 ### Phase 4 Completion Criteria
 
-- [ ] All `test_wait_queue.c` tests pass on Linux
-- [ ] Valgrind clean; ASan/UBSan clean
-- [ ] One-callback guarantee verified under cancel-after-serve and
+- [x] All `test_wait_queue.c` tests pass on Linux (168/168)
+- [x] Valgrind clean; ASan/UBSan clean
+- [x] One-callback guarantee verified under cancel-after-serve and
       timeout-after-cancel scenarios
-- [ ] Ring wrap-around verified
-- [ ] `in_callback` and `deferred_work` fields compile and link correctly
-- [ ] Quality milestone M12 confirmed
+- [x] Ring wrap-around verified
+- [x] `in_callback` and `deferred_work` fields compile and link correctly
+- [x] Quality milestone M12 confirmed
 
 ---
 
