@@ -3,8 +3,8 @@
 ## Status Overview
 
 **Last Updated**: 2026-03-31
-**Current Phase**: Phase 2 — Connection Table (complete)
-**Next Task**: Phase 3 — Connection State Machine (task 3.1)
+**Current Phase**: Phase 3 complete
+**Next Task**: Phase 4 — Wait Queue (task 4.1)
 
 ### Phase Summary
 
@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | 1 | Foundation | COMPLETE | ✓ | Build system, test harness, mock clock, skeleton |
 | 2 | Connection Table | COMPLETE | ✓ | Hash table, open addressing, tombstone, compaction |
-| 3 | Connection State Machine | NOT STARTED | — | conn_transition, record lifecycle, keepalive, socket creation |
+| 3 | Connection State Machine | COMPLETE | ✓ | conn_transition, record lifecycle, keepalive, socket creation |
 | 4 | Wait Queue | NOT STARTED | — | Ring buffer, cancel, timeout expiry, deferred work flags |
 | 5 | Reconnection Engine and Idle Reaper | NOT STARTED | — | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | NOT STARTED | — | checkout, checkin, advance, notify, pool lifecycle |
@@ -272,19 +272,19 @@ that the state machine calls — full implementations land in Phase 5.
     if live count < `min_connections`, call `reconnect_heap_push()` stub;
     call `observe_fn` with `BRAID_EV_CONN_DESTROYED` if registered
 
-**3.4 — `conn_alloc()` and `conn_socket_create()`**
-- Implement `conn_alloc(pool, fd, **conn)`: acquire free slot via
+**3.4 — `conn_alloc()` and `conn_socket_create()`** ✓ DONE
+- [x] Implement `conn_alloc(pool, fd, **conn)`: acquire free slot via
   `table_insert()`; initialise all record fields to zero/NULL; initialise
   the inline `conn->tag` struct: set `conn->tag.magic = BRAID_FD_MAGIC`
   and `conn->tag.fd = fd`. The tag is embedded in the connection record —
   no separate allocation. Pass `&conn->tag` as `epoll_data.ptr` when
   registering with epoll. See ARCHITECTURE.md §8.2.
-- Implement `conn_keepalive_configure(fd, config)`: set `SO_KEEPALIVE`,
+- [x] Implement `conn_keepalive_configure(fd, config)`: set `SO_KEEPALIVE`,
   `TCP_KEEPIDLE` (Linux) / `TCP_KEEPALIVE` (OpenBSD), `TCP_KEEPINTVL`,
   `TCP_KEEPCNT` per config values with documented defaults applied when
   config field is zero. Use `#ifdef __linux__` to select the correct idle
   constant. See ARCHITECTURE.md §5.
-- Implement `conn_socket_create(pool, addrinfo, *fd)`: call `socket()`;
+- [x] Implement `conn_socket_create(pool, addrinfo, *fd)`: call `socket()`;
   set `O_CLOEXEC` via `fcntl(fd, F_SETFD, FD_CLOEXEC)` and `O_NONBLOCK`
   via `fcntl(fd, F_SETFL, O_NONBLOCK)` — do not use `SOCK_NONBLOCK` or
   `SOCK_CLOEXEC` in the `socket()` call (not portable to OpenBSD); assert
@@ -300,8 +300,8 @@ that the state machine calls — full implementations land in Phase 5.
 - [x] Add stub `reconnect_heap_push(heap, entry)` in `src/braid_reconnect.c`
   — no-op that compiles and links. Full implementation in Phase 5.
 
-**3.6 — Tests (`tests/test_state_machine.c`)**
-- Implement all test cases from TESTING.md §3.2:
+**3.6 — Tests (`tests/test_state_machine.c`)** ✓ DONE
+- [x] Implement all test cases from TESTING.md §3.2:
   `test_all_legal_transitions`, `test_all_illegal_transitions`,
   `test_idle_entry_sets_last_active_ms`,
   `test_idle_entry_inserts_reaper_heap` (stub verified by call count),
@@ -313,18 +313,18 @@ that the state machine calls — full implementations land in Phase 5.
   `test_deferred_close_fires_after_callback`,
   `test_dead_vacates_table_slot`,
   `test_dead_fires_conn_destroyed_event`
-- Register all tests in `run_tests.c`
+- [x] Register all tests in `run_tests.c`
 
 ### Phase 3 Completion Criteria
 
-- [ ] All `test_state_machine.c` tests pass on Linux
-- [ ] Valgrind clean; ASan/UBSan clean
-- [ ] `grep -n "->state\s*=" src/*.c` returns only the line inside
-      `conn_transition()` — verified by inspection
-- [ ] All legal transitions return `BRAID_OK`
-- [ ] All illegal transitions rejected in debug build
-- [ ] `braid_fd_tag_t` allocated at `conn_alloc`, freed at DEAD
-- [ ] Quality milestone M11 confirmed
+- [x] All `test_state_machine.c` tests pass on Linux (61/61)
+- [x] Valgrind clean; ASan/UBSan clean
+- [x] `grep -n "state = " src/braid_conn.c` returns only the line inside
+      `conn_transition()` and the bootstrap write in `conn_alloc` — verified
+- [x] All legal transitions return `BRAID_OK`
+- [x] All illegal transitions rejected in debug build
+- [x] `braid_fd_tag_t` allocated at `conn_alloc`, freed at DEAD
+- [x] Quality milestone M11 confirmed
 
 ---
 

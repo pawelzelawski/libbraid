@@ -22,3 +22,6 @@ run_tests_tsan
 
 # cppcheck output
 cppcheck-output/
+
+# Valgrind core dumps (from fork'd children in illegal-transition tests)
+vgcore.*

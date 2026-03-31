@@ -5,10 +5,12 @@
  * See ARCHITECTURE.md §4, §5.
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -221,4 +223,167 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 	} /* switch */
 
 	return BRAID_OK;
+}
+
+/*
+ * conn_alloc — allocate a connection record and bootstrap CONNECTING state.
+ *
+ * Acquires a free hash table slot via table_insert(), zeroes the record,
+ * then initialises all fields required at CONNECTING entry:
+ *   - fd and tag embedded in the slot (no separate allocation for tag)
+ *   - created_at_ms set here because CONNECTING is the initial state,
+ *     established by construction rather than by conn_transition()
+ *   - heap_index set to UINT32_MAX (not in the idle reaper heap)
+ *
+ * Increments pool->live_count. Caller must call conn_transition(→ other)
+ * or conn_transition(→ DEAD) to complete the lifecycle.
+ * See ARCHITECTURE.md §8.2, §3.2.
+ */
+int
+conn_alloc(braid_pool_t *pool, int fd, braid_conn_t **conn)
+{
+	braid_conn_t tmp;
+	int rc;
+
+	/*
+	 * table_insert() reads (*conn)->fd to find the right probe chain,
+	 * so we must initialise a local record with the fd set before calling
+	 * it.  table_insert() copies the record into the table slot and sets
+	 * *conn to point to that slot.
+	 */
+	memset(&tmp, 0, sizeof(tmp));
+	tmp.fd = fd;
+	*conn = &tmp;
+
+	rc = table_insert(pool, conn);
+	if (rc != BRAID_OK) {
+		*conn = NULL;
+		return rc;
+	}
+
+	/* *conn now points to the in-table slot.  Fix up non-zero fields. */
+	(*conn)->state = BRAID_STATE_CONNECTING;
+	(*conn)->heap_index = UINT32_MAX;
+	(*conn)->created_at_ms = braid_now_ms();
+	(*conn)->tag.magic = BRAID_FD_MAGIC;
+	(*conn)->tag.fd = fd;
+
+	pool->live_count++;
+
+	return BRAID_OK;
+}
+
+/* Default TCP keepalive values — applied when config fields are zero. */
+#define BRAID_KEEPALIVE_IDLE_DEFAULT 60 /* seconds */
+#define BRAID_KEEPALIVE_INTVL_DEFAULT 10 /* seconds */
+#define BRAID_KEEPALIVE_CNT_DEFAULT 3 /* probes  */
+
+/*
+ * conn_keepalive_configure — apply TCP keepalive socket options.
+ *
+ * Enables SO_KEEPALIVE and configures the per-socket idle, interval,
+ * and probe-count values. Uses config fields when non-zero; otherwise
+ * applies the documented defaults above.
+ *
+ * TCP_KEEPIDLE is Linux-specific; OpenBSD uses TCP_KEEPALIVE for the
+ * same semantics. The #ifdef is the only platform conditional permitted
+ * outside the I/O abstraction layer. See ARCHITECTURE.md §5.
+ */
+int
+conn_keepalive_configure(int fd, const braid_config_t *config)
+{
+	int one = 1;
+	int idle = config->keepalive_idle ? (int)config->keepalive_idle
+					  : BRAID_KEEPALIVE_IDLE_DEFAULT;
+	int intvl = config->keepalive_interval ? (int)config->keepalive_interval
+					       : BRAID_KEEPALIVE_INTVL_DEFAULT;
+	int cnt = config->keepalive_count ? (int)config->keepalive_count
+					  : BRAID_KEEPALIVE_CNT_DEFAULT;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) == -1)
+		return BRAID_ERR_SYSCALL;
+
+#ifdef __linux__
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) ==
+	    -1)
+		return BRAID_ERR_SYSCALL;
+#else
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle)) ==
+	    -1)
+		return BRAID_ERR_SYSCALL;
+#endif
+
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)) ==
+	    -1)
+		return BRAID_ERR_SYSCALL;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt)) == -1)
+		return BRAID_ERR_SYSCALL;
+
+	return BRAID_OK;
+}
+
+/*
+ * conn_socket_create — create and configure a non-blocking TCP socket.
+ *
+ * Creates the socket, sets O_CLOEXEC and O_NONBLOCK via fcntl() (not via
+ * SOCK_CLOEXEC / SOCK_NONBLOCK — those flags are not portable to OpenBSD),
+ * applies TCP keepalive, and calls non-blocking connect(). EINPROGRESS is
+ * the normal result and is not treated as a failure — the caller registers
+ * the fd for writability and waits for connect completion via epoll/kqueue.
+ *
+ * Returns BRAID_OK and writes the fd to *fd_out on success (including
+ * EINPROGRESS). Returns BRAID_ERR_SYSCALL and closes the fd on failure.
+ * See ARCHITECTURE.md §6.3, §5.
+ */
+int
+conn_socket_create(braid_pool_t *pool, struct addrinfo *ai, int *fd_out)
+{
+	int fd;
+	int flags;
+
+	fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+	if (fd == -1)
+		return BRAID_ERR_SYSCALL;
+
+	/* O_CLOEXEC: close-on-exec, prevents fd leak across exec(). */
+	flags = fcntl(fd, F_GETFD);
+	if (flags == -1 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1)
+		goto fail;
+
+	/* O_NONBLOCK: required for non-blocking connect(). */
+	flags = fcntl(fd, F_GETFL);
+	if (flags == -1 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+		goto fail;
+
+#ifdef BRAID_DEBUG
+	{
+		int f = fcntl(fd, F_GETFD);
+		BRAID_DEBUG_ASSERT(
+		    f != -1 && (f & FD_CLOEXEC),
+		    "conn_socket_create: FD_CLOEXEC not set after fcntl");
+		f = fcntl(fd, F_GETFL);
+		BRAID_DEBUG_ASSERT(
+		    f != -1 && (f & O_NONBLOCK),
+		    "conn_socket_create: O_NONBLOCK not set after fcntl");
+	}
+#endif
+
+	if (conn_keepalive_configure(fd, &pool->config) != BRAID_OK)
+		goto fail;
+
+	/*
+	 * Non-blocking connect(). EINPROGRESS is the expected outcome —
+	 * the caller watches for writability and calls getsockopt(SO_ERROR)
+	 * on the writable event. Any other errno is a hard failure.
+	 */
+	if (connect(fd, ai->ai_addr, ai->ai_addrlen) == -1 &&
+	    errno != EINPROGRESS)
+		goto fail;
+
+	*fd_out = fd;
+	return BRAID_OK;
+
+fail:
+	close(fd);
+	return BRAID_ERR_SYSCALL;
 }

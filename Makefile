@@ -31,9 +31,9 @@ CFLAGS_DEV    = $(CFLAGS_COMMON)					\
                 -O0 -g3 -gdwarf-4 -Werror				\
                 -fsanitize=address,undefined				\
                 -fno-omit-frame-pointer				\
-                -DBRAID_DEBUG
+                -DBRAID_DEBUG -DBRAID_TEST_CLOCK
 
-CFLAGS_TEST   = $(CFLAGS_DEV) -DBRAID_TEST_CLOCK
+CFLAGS_TEST   = $(CFLAGS_DEV)
 
 CFLAGS_TSAN   = $(CFLAGS_COMMON)					\
                 -O1 -g3						\
@@ -73,7 +73,7 @@ endif
 ALL_LIB_SRCS = $(LIB_SRCS) $(PLATFORM_SRCS)
 
 # Test source files
-TEST_SRCS = tests/run_tests.c tests/test_table.c
+TEST_SRCS = tests/run_tests.c tests/test_table.c tests/test_state_machine.c
 
 # Build output directories
 BUILD_DIR       = build
