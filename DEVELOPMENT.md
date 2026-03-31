@@ -364,26 +364,30 @@ checkout is guaranteed under all outcomes.
 - [x] Define `braid_ring_t` struct: `braid_waiter_t *slots`, `uint32_t head`,
   `uint32_t tail`, `uint32_t count`, `uint32_t capacity`
 
-**4.3 — Wait queue implementation (`src/braid_waitq.c`)**
-- Implement `waitq_init(ring, cap)`: allocate `cap` slots; initialise
+**4.3 — Wait queue implementation (`src/braid_waitq.c`)** ✓ DONE
+- [x] Implement `waitq_init(ring, cap)`: allocate `cap` slots; initialise
   head, tail, count to 0
-- Implement `waitq_destroy(ring)`: free slot array
-- Implement `waitq_enqueue(ring, cb, cb_ctx, deadline_ms, *token)`:
-  check capacity; write to `slots[tail % capacity]`; set token to tail
-  value; advance tail; increment count. Return error if ring full.
+- [x] Implement `waitq_destroy(ring)`: free slot array
+- [x] Implement `waitq_enqueue(ring, cb, cb_ctx, deadline_ms, *token)`:
+  check capacity; write to `slots[tail % cap]`; set token to tail
+  value; advance tail; increment count. Return BRAID_ERR_EXHAUSTED if full.
   See ARCHITECTURE.md §10.1.
-- Implement `waitq_serve_head(ring, fd, conn_ctx)`: skip tombstones by
+- [x] Implement `waitq_serve_head(ring, fd, conn_ctx)`: skip tombstones by
   advancing head; invoke callback with `fd, conn_ctx, BRAID_OK, cb_ctx`;
-  tombstone served slot; decrement count. See ARCHITECTURE.md §10.1.
-- Implement `waitq_cancel(ring, token)`: locate `slots[token % capacity]`;
-  verify not already tombstoned; invoke callback with `BRAID_ERR_CANCELLED`;
-  tombstone slot; decrement count. See ARCHITECTURE.md §10.3.
-- Implement `waitq_expire(ring, now_ms)`: scan from head; for each
-  non-tombstone entry with `deadline_ms <= now_ms`, invoke callback with
-  `BRAID_ERR_TIMEOUT`, tombstone, decrement count; stop at first
-  non-expired non-tombstone entry. See ARCHITECTURE.md §10.4.
-- Implement `waitq_shutdown(ring)`: invoke all non-tombstone entries with
-  `BRAID_ERR_SHUTDOWN`; tombstone all; reset count to 0
+  tombstone served slot before callback (one-callback guarantee); decrement
+  count. See ARCHITECTURE.md §10.1.
+- [x] Implement `waitq_cancel(ring, token)`: locate `slots[token % cap]`;
+  verify token matches AND not already tombstoned; tombstone before
+  callback; invoke callback with `BRAID_ERR_CANCELLED`; decrement count.
+  See ARCHITECTURE.md §10.3.
+- [x] Implement `waitq_expire(ring, now_ms)`: scan from head; drain
+  tombstones (advance head); for each non-tombstone entry with
+  `deadline_ms <= now_ms` (deadline_ms == 0 = no timeout), tombstone
+  before callback, invoke `BRAID_ERR_TIMEOUT`, decrement count, advance
+  head; stop at first non-expired non-tombstone entry. See §10.4.
+- [x] Implement `waitq_shutdown(ring)`: scan full occupied span [head, tail);
+  invoke all non-tombstone entries with `BRAID_ERR_SHUTDOWN` (tombstone
+  before callback); reset count to 0; advance head to tail
 
 **4.4 — Tests (`tests/test_wait_queue.c`)**
 - Implement all test cases from TESTING.md §3.3:
