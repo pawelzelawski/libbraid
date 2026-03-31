@@ -32,7 +32,7 @@ uint64_t braid_test_clock_ms = 0;
  * Forward declarations for test suite entry points.
  * Uncomment each as the corresponding phase is implemented.
  */
-/* void run_table_tests(void);       */ /* Phase 2 */
+void run_table_tests(void); /* Phase 2 */
 /* void run_state_machine_tests(void); */ /* Phase 3 */
 /* void run_wait_queue_tests(void);   */ /* Phase 4 */
 /* void run_reconnect_tests(void);    */ /* Phase 5 */
@@ -43,10 +43,7 @@ uint64_t braid_test_clock_ms = 0;
 int
 main(void)
 {
-	/*
-	 * Test suites will be called here as they are implemented.
-	 * Phase 1 has no test cases — the suite is intentionally empty.
-	 */
+	run_table_tests(); /* Phase 2 */
 
 	printf("%d/%d tests passed\n", tests_passed,
 	       tests_passed + tests_failed);

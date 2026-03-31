@@ -185,18 +185,18 @@ correctly. No allocation after `table_init()`.
 - [x] Add `_Static_assert` checks: `sizeof(braid_conn_t)==48`,
   `offsetof(braid_fd_tag_t, magic)==0`, `sizeof(pool) > sizeof(config)`
 
-**2.2 — Hash table implementation (`src/braid_table.c`)**
-- Implement `table_init(pool)`: allocate `2 × max_connections` slots of
+**2.2 — Hash table implementation (`src/braid_table.c`)** ✓ DONE (2026-03-31)
+- [x] Implement `table_init(pool)`: allocate `2 × max_connections` slots of
   `braid_conn_t`; initialise all `fd` fields to -1 (empty); store
   `table_size = 2 × max_connections` in pool. See ARCHITECTURE.md §3.1.
-- Implement `table_destroy(pool)`: free slot array
-- Implement `table_lookup(pool, fd, **conn)`: hash `fd % table_size`;
+- [x] Implement `table_destroy(pool)`: free slot array
+- [x] Implement `table_lookup(pool, fd, **conn)`: hash `fd % table_size`;
   linear probe; skip tombstones (`CONN_FLAG_TOMBSTONE`); stop on empty
   slot (`fd == -1`); return found record or NULL.
   See ARCHITECTURE.md §3.3.
-- Implement `table_insert(pool, conn)`: probe for first empty or tombstone
+- [x] Implement `table_insert(pool, conn)`: probe for first empty or tombstone
   slot; write record; clear tombstone flag on reused slot
-- Implement `table_delete(pool, fd)`: set `CONN_FLAG_TOMBSTONE`; set
+- [x] Implement `table_delete(pool, fd)`: set `CONN_FLAG_TOMBSTONE`; set
   `fd = -1`. No compaction — inline `conn->tag` addresses must remain
   stable. See ARCHITECTURE.md §3.3.
 
