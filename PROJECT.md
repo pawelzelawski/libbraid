@@ -200,19 +200,21 @@ libbraid is **not** aimed at:
 
 ## Current Status
 
-**Architecture and documentation phase in progress.** No code has been
-written yet.
+**Architecture and documentation complete.** Implementation is complete
+through Phase 4.
 
 | Phase | Name | Status |
 |---|---|---|
 | — | Architecture | COMPLETE |
-| — | Documentation | IN PROGRESS |
-| 1 | Core pool — connection table, state machine, checkout/checkin, wait queue | NOT STARTED |
-| 2 | Reconnection engine and idle reaper | NOT STARTED |
-| 3 | Half-open detection, keepalive configuration, validate_fn | NOT STARTED |
-| 4 | Observability hooks and error reporting | NOT STARTED |
-| 5 | OpenBSD (kqueue) port | NOT STARTED |
-| 6 | Hardening, benchmarks, and release | NOT STARTED |
+| — | Documentation | COMPLETE |
+| 1 | Foundation | COMPLETE |
+| 2 | Connection Table | COMPLETE |
+| 3 | Connection State Machine | COMPLETE |
+| 4 | Wait Queue | COMPLETE |
+| 5 | Reconnection Engine and Idle Reaper | NOT STARTED |
+| 6 | Pool Core | NOT STARTED |
+| 7 | OpenBSD (kqueue) port | NOT STARTED |
+| 8 | Hardening, benchmarks, and release | NOT STARTED |
 
 ## Relationship to Existing Libraries
 
@@ -267,5 +269,5 @@ ISC License. Simple, permissive, compatible with OpenBSD philosophy.
 ---
 
 **Document Version**: 1.0
-**Last Updated**: 2026-03-30
-**Status**: Documentation phase — no code written yet
+**Last Updated**: 2026-03-31
+**Status**: Implementation complete through Phase 4

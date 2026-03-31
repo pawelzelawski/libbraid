@@ -30,15 +30,21 @@ typedef uint32_t braid_event_type_t;
  * All hooks are optional — NULL is safe on every hook field.
  */
 
-/* Called after TCP connect completes; perform TLS or auth setup here. */
-typedef int (*braid_init_fn)(int fd, void *conn_ctx_out, void *hook_ctx,
+/*
+ * Called after TCP connect completes; perform TLS or auth setup here.
+ * conn_ctx_out is a pointer-to-pointer output parameter for connection state.
+ */
+typedef int (*braid_init_fn)(int fd, void **conn_ctx_out, void *hook_ctx,
 			     uint64_t deadline_ms);
 
 /* Called at checkout if idle duration exceeds idle_threshold. */
 typedef int (*braid_validate_fn)(int fd, void *conn_ctx, void *hook_ctx,
 				 uint64_t deadline_ms);
 
-/* Called before fd is closed; release protocol state here. */
+/*
+ * Called before fd is closed; release protocol state here.
+ * Must not close fd and must not call any libbraid API function.
+ */
 typedef void (*braid_destroy_fn)(int fd, void *conn_ctx, void *hook_ctx);
 
 /* Called on pool lifecycle events (connection created/destroyed, etc.). */

@@ -20,9 +20,23 @@
 #include "braid_internal.h"
 #include "braid_conn.h"
 #include "braid_io.h"
+#include "braid_pool.h"
 #include "braid_reaper.h"
 #include "braid_reconnect.h"
 #include "braid_table.h"
+
+/*
+ * callback_leave — common callback-exit protocol.
+ * Decrements in_callback and drains deferred work on outermost callback exit.
+ * See CODING_STANDARDS.md §4.1.
+ */
+static void
+callback_leave(braid_pool_t *pool)
+{
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
+}
 
 /*
  * Legal state transition table.
@@ -128,7 +142,7 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 				pool->in_callback++;
 				pool->config.observe_fn(
 				    &ev, pool->config.hook_context);
-				pool->in_callback--;
+				callback_leave(pool);
 			}
 		}
 		break;
@@ -145,13 +159,13 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 			pool->in_callback++;
 			pool->config.destroy_fn(conn->fd, conn->conn_ctx,
 						pool->config.hook_context);
-			pool->in_callback--;
+			callback_leave(pool);
 		}
 		if (pool->in_callback == 0) {
 			return conn_transition(pool, conn, BRAID_STATE_DEAD);
-		} else {
-			conn->flags |= CONN_FLAG_CLOSING_DEFERRED;
 		}
+
+		conn->flags |= CONN_FLAG_CLOSING_DEFERRED;
 		break;
 
 	case BRAID_STATE_DEAD: {
@@ -169,7 +183,7 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 			pool->in_callback++;
 			pool->config.destroy_fn(fd, conn->conn_ctx,
 						pool->config.hook_context);
-			pool->in_callback--;
+			callback_leave(pool);
 		}
 
 		/*
@@ -216,7 +230,7 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 			ev.fd = fd;
 			pool->in_callback++;
 			pool->config.observe_fn(&ev, pool->config.hook_context);
-			pool->in_callback--;
+			callback_leave(pool);
 		}
 		break;
 	}

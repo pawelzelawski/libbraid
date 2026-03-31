@@ -70,6 +70,19 @@ free_ring(braid_ring_t *ring)
 	free(ring);
 }
 
+/*
+ * waitq_init must reject cap=0 to avoid modulo-by-zero on enqueue/cancel.
+ */
+static void
+test_init_zero_capacity_rejected(void)
+{
+	braid_ring_t ring;
+
+	memset(&ring, 0, sizeof(ring));
+	CHECK_ERR("init-zero: cap=0 rejected", waitq_init(&ring, 0),
+		  BRAID_ERR_INVAL);
+}
+
 /* ── test cases ──────────────────────────────────────────────────────── */
 
 /*
@@ -523,6 +536,7 @@ test_full_ring_rejects_enqueue(void)
 void
 run_wait_queue_tests(void)
 {
+	test_init_zero_capacity_rejected();
 	test_enqueue_dequeue_fifo();
 	test_tombstone_skip_on_dequeue();
 	test_cancel_by_token();

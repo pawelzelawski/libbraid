@@ -46,6 +46,34 @@ free_pool(braid_pool_t *pool)
 }
 
 /*
+ * table_init must reject max_connections=0 to prevent zero-sized table.
+ */
+static void
+test_table_init_rejects_zero_max_connections(void)
+{
+	braid_pool_t pool;
+
+	memset(&pool, 0, sizeof(pool));
+	pool.config.max_connections = 0;
+	CHECK_ERR("table_init rejects max_connections=0", table_init(&pool),
+		  BRAID_ERR_INVAL);
+}
+
+/*
+ * table_init must reject max_connections that overflow 2*max_connections.
+ */
+static void
+test_table_init_rejects_overflow_max_connections(void)
+{
+	braid_pool_t pool;
+
+	memset(&pool, 0, sizeof(pool));
+	pool.config.max_connections = UINT32_MAX;
+	CHECK_ERR("table_init rejects table size overflow", table_init(&pool),
+		  BRAID_ERR_INVAL);
+}
+
+/*
  * insert_fd — helper: insert a zeroed record with the given fd.
  * Returns a pointer to the table slot on success, NULL on failure.
  */
@@ -283,6 +311,8 @@ test_fd_zero_valid_key(void)
 void
 run_table_tests(void)
 {
+	test_table_init_rejects_zero_max_connections();
+	test_table_init_rejects_overflow_max_connections();
 	test_insert_and_lookup();
 	test_probe_chain_collision();
 	test_tombstone_skip_on_lookup();

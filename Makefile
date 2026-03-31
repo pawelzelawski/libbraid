@@ -131,9 +131,13 @@ valgrind: $(TEST_BIN_VG)
 # clang-tidy + cppcheck
 lint:
 	clang-tidy $(ALL_LIB_SRCS) -- $(CFLAGS_DEV) $(INCLUDES)
-	cppcheck --enable=all --error-exitcode=1	\
-	         --suppress=missingIncludeSystem	\
-	         src/
+	@if command -v cppcheck >/dev/null 2>&1; then \
+		cppcheck --enable=all --error-exitcode=1 \
+		         --suppress=missingIncludeSystem \
+		         src/; \
+	else \
+		echo "cppcheck not found; skipping cppcheck step"; \
+	fi
 
 # clang-format
 format:

@@ -22,9 +22,19 @@ int
 table_init(braid_pool_t *pool)
 {
 	uint32_t i;
+	size_t alloc_count;
 
-	pool->table_size = pool->config.max_connections * 2;
-	pool->table = calloc(pool->table_size, sizeof(braid_conn_t));
+	if (pool->config.max_connections == 0)
+		return BRAID_ERR_INVAL;
+	if (pool->config.max_connections > (UINT32_MAX / 2u))
+		return BRAID_ERR_INVAL;
+
+	pool->table_size = pool->config.max_connections * 2u;
+	alloc_count = (size_t)pool->table_size;
+	if (alloc_count > SIZE_MAX / sizeof(braid_conn_t))
+		return BRAID_ERR_NOMEM;
+
+	pool->table = calloc(alloc_count, sizeof(braid_conn_t));
 	if (pool->table == NULL)
 		return BRAID_ERR_NOMEM;
 

@@ -21,6 +21,9 @@
 int
 waitq_init(braid_ring_t *ring, uint32_t cap)
 {
+	if (cap == 0)
+		return BRAID_ERR_INVAL;
+
 	ring->slots = malloc(cap * sizeof(braid_waiter_t));
 	if (ring->slots == NULL)
 		return BRAID_ERR_NOMEM;

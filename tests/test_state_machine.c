@@ -47,6 +47,16 @@ cb_observe(const braid_event_t *ev, void *hook)
 	g_observe_calls++;
 }
 
+static void
+cb_observe_set_deferred(const braid_event_t *ev, void *hook)
+{
+	braid_pool_t *pool;
+
+	(void)ev;
+	pool = hook;
+	pool->deferred_work |= BRAID_DEFERRED_SERVE_WAITQUEUE;
+}
+
 /* ── pool helpers ────────────────────────────────────────────────────── */
 
 static braid_pool_t *
@@ -578,6 +588,34 @@ test_dead_fires_conn_destroyed_event(void)
 	free_pool(pool);
 }
 
+/*
+ * Callback exit protocol must drain deferred_work when in_callback reaches 0.
+ * observe_fn sets a deferred flag; callback exit should call
+ * pool_drain_deferred, clearing the flag in this phase.
+ */
+static void
+test_callback_exit_drains_deferred_work(void)
+{
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	int fd;
+
+	pool = make_pool(4);
+	pool->config.observe_fn = cb_observe_set_deferred;
+	pool->config.hook_context = pool;
+	fd = make_fd();
+
+	conn_alloc(pool, fd, &conn);
+	advance_to_idle(pool, conn);
+	CHECK("deferred_work initially clear", pool->deferred_work == 0);
+
+	conn_transition(pool, conn, BRAID_STATE_ACTIVE);
+	CHECK("callback exit drained deferred work", pool->deferred_work == 0);
+
+	conn_transition(pool, conn, BRAID_STATE_DEAD);
+	free_pool(pool);
+}
+
 /* ── suite entry point ───────────────────────────────────────────────── */
 
 void
@@ -595,4 +633,5 @@ run_state_machine_tests(void)
 	test_deferred_close_fires_after_callback();
 	test_dead_vacates_table_slot();
 	test_dead_fires_conn_destroyed_event();
+	test_callback_exit_drains_deferred_work();
 }
