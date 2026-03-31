@@ -17,3 +17,33 @@
 #include "../include/braid.h"
 #include "braid_internal.h"
 #include "braid_io.h"
+
+/*
+ * Stubs — full implementation in Phase 6.
+ */
+
+int
+io_watch(braid_pool_t *pool, int fd, uint32_t events)
+{
+	(void)pool;
+	(void)fd;
+	(void)events;
+	return BRAID_OK;
+}
+
+int
+io_modify(braid_pool_t *pool, int fd, uint32_t events)
+{
+	(void)pool;
+	(void)fd;
+	(void)events;
+	return BRAID_OK;
+}
+
+int
+io_unwatch(braid_pool_t *pool, int fd)
+{
+	(void)pool;
+	(void)fd;
+	return BRAID_OK;
+}

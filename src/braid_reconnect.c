@@ -12,3 +12,15 @@
 #include "../include/braid.h"
 #include "braid_internal.h"
 #include "braid_reconnect.h"
+
+/*
+ * Stub — full implementation in Phase 5.
+ */
+
+int
+reconnect_heap_push(braid_reconnect_heap_t *heap, braid_reconnect_entry_t entry)
+{
+	(void)heap;
+	(void)entry;
+	return BRAID_OK;
+}

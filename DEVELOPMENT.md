@@ -106,7 +106,7 @@ Code compiles clean with zero warnings.
 
 ### Tasks
 
-**1.1 — Repository skeleton** ✓ DONE (2026-03-31)
+**1.1 — Repository skeleton** ✓ DONE
 - [x] Create directory structure per REPOSITORY_STRUCTURE.md §1:
   `src/`, `include/`, `tests/`, `bench/`
 - [x] Create `include/braid.h` with skeleton: include guards, `<stdint.h>`
@@ -129,7 +129,7 @@ Code compiles clean with zero warnings.
 - [x] Verify `make dev` and `make release` compile all stubs with zero warnings
   on Linux x86_64
 
-**1.2 — Test harness and mock clock** ✓ DONE (2026-03-31)
+**1.2 — Test harness and mock clock** ✓ DONE
 - [x] `tests/test_harness.h`: `CHECK()` and `CHECK_ERR()` macros, pass/fail counters
 - [x] `tests/run_tests.c`: test binary entry point
 - [x] `braid_now_ms()` in `src/braid_internal.h`: both `BRAID_TEST_CLOCK` and
@@ -139,7 +139,7 @@ Code compiles clean with zero warnings.
 - [x] `make test` prints `0/0 tests passed`, exits 0
 - [x] `make valgrind` exits clean (ERROR SUMMARY: 0)
 
-**1.3 — `_Static_assert` placeholders** ✓ DONE (2026-03-31)
+**1.3 — `_Static_assert` placeholders** ✓ DONE
 - [x] Three placeholder `_Static_assert(1 == 1, "placeholder")` entries in
   `src/braid_internal.h` for struct size and offset checks
 
@@ -175,7 +175,7 @@ correctly. No allocation after `table_init()`.
 
 ### Tasks
 
-**2.1 — Struct definitions** ✓ DONE (2026-03-31)
+**2.1 — Struct definitions** ✓ DONE
 - [x] Define `braid_conn_t` in `src/braid_internal.h` per ARCHITECTURE.md §3.2:
   `fd`, `state`, `conn_ctx`, `created_at_ms`, `last_active_ms`, `flags`,
   `tag` (inline). `state` is `braid_state_t` (enum, values 0–5).
@@ -185,7 +185,7 @@ correctly. No allocation after `table_init()`.
 - [x] Add `_Static_assert` checks: `sizeof(braid_conn_t)==48`,
   `offsetof(braid_fd_tag_t, magic)==0`, `sizeof(pool) > sizeof(config)`
 
-**2.2 — Hash table implementation (`src/braid_table.c`)** ✓ DONE (2026-03-31)
+**2.2 — Hash table implementation (`src/braid_table.c`)** ✓ DONE
 - [x] Implement `table_init(pool)`: allocate `2 × max_connections` slots of
   `braid_conn_t`; initialise all `fd` fields to -1 (empty); store
   `table_size = 2 × max_connections` in pool. See ARCHITECTURE.md §3.1.
@@ -200,7 +200,7 @@ correctly. No allocation after `table_init()`.
   `fd = -1`. No compaction — inline `conn->tag` addresses must remain
   stable. See ARCHITECTURE.md §3.3.
 
-**2.3 — Tests (`tests/test_table.c`)** ✓ DONE (2026-03-31)
+**2.3 — Tests (`tests/test_table.c`)** ✓ DONE
 - [x] Implement all test cases from TESTING.md §3.1:
   `test_insert_and_lookup`, `test_probe_chain_collision`,
   `test_tombstone_skip_on_lookup`, `test_delete_vacates_slot`,
@@ -242,18 +242,18 @@ that the state machine calls — full implementations land in Phase 5.
 
 ### Tasks
 
-**3.1 — `braid_fd_tag_t` definition**
-- Define `braid_fd_tag_t` in `src/braid_internal.h`:
+**3.1 — `braid_fd_tag_t` definition** ✓ DONE
+- [x] Define `braid_fd_tag_t` in `src/braid_internal.h`:
   `uint32_t magic` (value `BRAID_FD_MAGIC`), `int fd`.
   Define `BRAID_FD_MAGIC` constant. See ARCHITECTURE.md §8.2.
 
-**3.2 — Legal transition table**
-- Define the legal transition table in `src/braid_conn.c` as a static
+**3.2 — Legal transition table** ✓ DONE
+- [x] Define the legal transition table in `src/braid_conn.c` as a static
   array of `(from, to)` pairs matching ARCHITECTURE.md §4.2 exactly.
   Used by `conn_transition()` for legality assertion.
 
-**3.3 — `conn_transition()` implementation**
-- Implement `conn_transition(pool, conn, new_state)` per
+**3.3 — `conn_transition()` implementation** ✓ DONE
+- [x] Implement `conn_transition(pool, conn, new_state)` per
   ARCHITECTURE.md §4.3:
   - Assert transition legality against table (debug build: abort with
     diagnostic; release build: return `BRAID_ERR_INVAL`)
@@ -292,12 +292,12 @@ that the state machine calls — full implementations land in Phase 5.
   non-blocking `connect()`; return fd. `EINPROGRESS` is the expected result
   — not an error. See ARCHITECTURE.md §6.3.
 
-**3.5 — Heap stubs**
-- Add stub `reaper_heap_insert(heap, conn)` and
+**3.5 — Heap stubs** ✓ DONE
+- [x] Add stub `reaper_heap_insert(heap, conn)` and
   `reaper_heap_remove(heap, conn)` in `src/braid_reaper.c` — no-ops that
   compile and link. Signatures take `braid_conn_t *` so that Phase 5 can
   maintain `conn->heap_index` directly. Full implementation in Phase 5.
-- Add stub `reconnect_heap_push(heap, entry)` in `src/braid_reconnect.c`
+- [x] Add stub `reconnect_heap_push(heap, entry)` in `src/braid_reconnect.c`
   — no-op that compiles and links. Full implementation in Phase 5.
 
 **3.6 — Tests (`tests/test_state_machine.c`)**
