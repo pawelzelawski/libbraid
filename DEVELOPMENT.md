@@ -357,11 +357,11 @@ checkout is guaranteed under all outcomes.
 - [x] The `in_callback` increment/decrement/drain pattern must be in place and
   tested before wait queue logic is wired into the pool in Phase 6.
 
-**4.2 — `braid_waiter_t` and ring buffer definition**
-- Define `braid_waiter_t` in `src/braid_internal.h` per
+**4.2 — `braid_waiter_t` and ring buffer definition** ✓ DONE
+- [x] Define `braid_waiter_t` in `src/braid_internal.h` per
   ARCHITECTURE.md §10.1: `cb`, `cb_ctx`, `deadline_ms`, `token`, `flags`
-- Define `WAITER_FLAG_TOMBSTONE` flag constant
-- Define `braid_ring_t` struct: `braid_waiter_t *slots`, `uint32_t head`,
+- [x] Define `WAITER_FLAG_TOMBSTONE` flag constant
+- [x] Define `braid_ring_t` struct: `braid_waiter_t *slots`, `uint32_t head`,
   `uint32_t tail`, `uint32_t count`, `uint32_t capacity`
 
 **4.3 — Wait queue implementation (`src/braid_waitq.c`)**
