@@ -73,12 +73,18 @@ make_pool(uint32_t max)
 		free(pool);
 		return NULL;
 	}
+	if (reaper_heap_init(&pool->idle, max) != BRAID_OK) {
+		table_destroy(pool);
+		free(pool);
+		return NULL;
+	}
 	return pool;
 }
 
 static void
 free_pool(braid_pool_t *pool)
 {
+	reaper_heap_destroy(&pool->idle);
 	table_destroy(pool);
 	free(pool);
 }

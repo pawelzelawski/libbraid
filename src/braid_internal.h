@@ -159,11 +159,14 @@ typedef struct braid_reconnect_heap {
 
 /*
  * braid_idle_entry_t — one entry in the idle reaper heap.
- * See ARCHITECTURE.md §7.1.
+ * Stores a direct pointer to the connection record rather than an fd;
+ * pool->table is never reallocated so the pointer is stable for the
+ * connection's lifetime.  conn->fd is used by reaper_advance() instead
+ * of a separate fd field.  See ARCHITECTURE.md §7.1.
  */
 typedef struct braid_idle_entry {
 	uint64_t last_active_ms;
-	int fd;
+	braid_conn_t *conn;
 } braid_idle_entry_t;
 
 /*

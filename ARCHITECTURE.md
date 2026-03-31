@@ -588,14 +588,17 @@ connections in the IDLE state. This allows `braid_pool_advance()` to compute
 the exact time until the next idle reap event without scanning the full
 connection table.
 
-**Structure:** The heap stores `(last_active_ms, fd)` pairs. fd is included
-so that the connection record can be located in the hash table on reap.
+**Structure:** The heap stores `(last_active_ms, conn*)` pairs. A direct
+pointer to the connection record is used rather than `fd` — the connection
+table is allocated once at pool creation and never reallocated, so the
+pointer is stable for the connection's lifetime. This avoids a hash table
+lookup on every sift-up and sift-down operation during heap maintenance.
 
 **Heap size:** Fixed at `max_connections` slots, allocated at pool creation.
 
 **Heap maintenance:** `conn_transition()` maintains the heap as a state-entry
 invariant:
-- On IDLE entry: insert `(conn->last_active_ms, conn->fd)` into the heap;
+- On IDLE entry: insert `(conn->last_active_ms, conn)` into the heap;
   write the assigned heap position into `conn->heap_index`.
 - On IDLE exit (to ACTIVE, CLOSING, or DEAD): remove the entry from the heap
   using `conn->heap_index` for O(1) position lookup; set
@@ -618,7 +621,7 @@ the removed record.
 
 On each `braid_pool_advance()` call:
 
-1. Peek at the idle reaper heap minimum `(last_active_ms, fd)`.
+1. Peek at the idle reaper heap minimum `(last_active_ms, conn*)`.
 2. If `now_ms - last_active_ms < config.idle_reap_timeout`, no reap needed.
    Compute `next_ms` contribution as `last_active_ms + idle_reap_timeout - now_ms`.
 3. Otherwise, check whether reaping this connection would drop the pool below

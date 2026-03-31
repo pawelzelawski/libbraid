@@ -480,29 +480,29 @@ reaper respects the `min_connections` floor. Both components drive
   skip and fire failure event if `max_attempts > 0` and
   `entry.attempt >= max_attempts`
 
-**5.4 — Idle reaper heap (`src/braid_reaper.c`)**
-- Define `braid_idle_entry_t` in `src/braid_internal.h`:
-  `last_active_ms` (uint64_t), `fd` (int)
-- Define `braid_idle_heap_t`: `braid_idle_entry_t *entries`, `uint32_t
+**5.4 — Idle reaper heap (`src/braid_reaper.c`)** ✓ DONE
+- [x] Define `braid_idle_entry_t` in `src/braid_internal.h`:
+  `last_active_ms` (uint64_t), `conn` (braid_conn_t*)
+- [x] Define `braid_idle_heap_t`: `braid_idle_entry_t *entries`, `uint32_t
   count`, `uint32_t capacity`. No parallel index array — heap position is
   stored in `conn->heap_index` on the connection record itself.
   See ARCHITECTURE.md §7.1 for rationale.
-- Replace stub `reaper_heap_insert(heap, conn)` with full implementation:
+- [x] Replace stub `reaper_heap_insert(heap, conn)` with full implementation:
   O(log n) insert with sift-up; write assigned position to
   `conn->heap_index` at every swap; set `conn->heap_index` to final
   position on completion. See ARCHITECTURE.md §7.1.
-- Replace stub `reaper_heap_remove(heap, conn)` with full implementation:
+- [x] Replace stub `reaper_heap_remove(heap, conn)` with full implementation:
   read position from `conn->heap_index`; swap with last entry; decrement
   count; attempt sift-up from position first, then sift-down — BOTH
   directions required (moved element may need sift-up if smaller than new
   parent, or sift-down if larger than a child); update `heap_index` on all
   swapped records; set `conn->heap_index = UINT32_MAX`.
   See ARCHITECTURE.md §7.1.
-- Implement `reaper_heap_peek(heap)`: return minimum `last_active_ms` or
+- [x] Implement `reaper_heap_peek(heap)`: return minimum `last_active_ms` or
   `UINT64_MAX` if empty
-- Implement `reaper_heap_init(heap, cap)`: allocate `cap` entries;
+- [x] Implement `reaper_heap_init(heap, cap)`: allocate `cap` entries;
   initialise count to 0
-- Implement `reaper_heap_destroy(heap)`: free entries array
+- [x] Implement `reaper_heap_destroy(heap)`: free entries array
 
 **5.5 — Reaper advance logic**
 - Implement `reaper_advance(pool, now_ms)` per ARCHITECTURE.md §7.2:
