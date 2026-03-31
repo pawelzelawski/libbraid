@@ -512,8 +512,8 @@ reaper respects the `min_connections` floor. Both components drive
   heap minimum is in the future or floor would be breached.
   Apply default `idle_reap_timeout` if config field is zero.
 
-**5.6 — Tests (`tests/test_reconnect.c`, `tests/test_reaper.c`)**
-- Implement all test cases from TESTING.md §3.4 in `test_reconnect.c`:
+**5.6 — Tests (`tests/test_reconnect.c`, `tests/test_reaper.c`)** ✓ DONE
+- [x] Implement all test cases from TESTING.md §3.4 in `test_reconnect.c`:
   `test_heap_push_pop_ordering`, `test_heap_peek_returns_minimum`,
   `test_backoff_attempt_0`, `test_backoff_attempt_5`,
   `test_backoff_attempt_31`, `test_backoff_attempt_64`,
@@ -521,7 +521,7 @@ reaper respects the `min_connections` floor. Both components drive
   `test_max_attempts_N_stops`, `test_reconnect_advance_fires_due`,
   `test_reconnect_advance_skips_future`,
   `test_reconnect_attempt_event_fired`
-- Implement all test cases from TESTING.md §3.5 in `test_reaper.c`:
+- [x] Implement all test cases from TESTING.md §3.5 in `test_reaper.c`:
   `test_heap_insert_and_peek`, `test_heap_remove_by_conn`,
   `test_heap_index_consistency_after_sift_up`,
   `test_heap_index_consistency_after_sift_down`,
@@ -529,20 +529,20 @@ reaper respects the `min_connections` floor. Both components drive
   `test_reaper_advance_respects_floor`,
   `test_reaper_advance_stops_at_future`,
   `test_next_ms_computed_correctly`
-- All timer-dependent tests use `braid_test_clock_ms`
-- Register all tests in `run_tests.c`
+- [x] All timer-dependent tests use `braid_test_clock_ms`
+- [x] Register all tests in `run_tests.c`
 
 ### Phase 5 Completion Criteria
 
-- [ ] All `test_reconnect.c` tests pass on Linux
-- [ ] All `test_reaper.c` tests pass on Linux
-- [ ] Valgrind clean; ASan/UBSan clean
-- [ ] Backoff exponent overflow guard verified (`attempt >= 31` clamped)
-- [ ] `backoff_cap` respected at all attempt values
-- [ ] Reaper `heap_index` consistent on conn record after every insert,
+- [x] All `test_reconnect.c` tests pass on Linux
+- [x] All `test_reaper.c` tests pass on Linux
+- [x] Valgrind clean; ASan/UBSan clean
+- [x] Backoff exponent overflow guard verified (`attempt >= 31` clamped)
+- [x] `backoff_cap` respected at all attempt values
+- [x] Reaper `heap_index` consistent on conn record after every insert,
       remove, sift-up, and sift-down operation
-- [ ] Reaper `min_connections` floor verified
-- [ ] Quality milestones M13 and M14 confirmed
+- [x] Reaper `min_connections` floor verified
+- [x] Quality milestones M13 and M14 confirmed
 
 ---
 

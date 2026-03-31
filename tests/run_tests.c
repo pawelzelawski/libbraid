@@ -36,7 +36,7 @@ void run_table_tests(void); /* Phase 2 */
 void run_state_machine_tests(void); /* Phase 3 */
 void run_wait_queue_tests(void); /* Phase 4 */
 void run_reconnect_tests(void); /* Phase 5 */
-/* void run_reaper_tests(void);       */ /* Phase 5 */
+void run_reaper_tests(void); /* Phase 5 */
 /* void run_pool_tests(void);         */ /* Phase 6 */
 /* void run_integration_tests(void);  */ /* Phase 8 */
 
@@ -47,6 +47,7 @@ main(void)
 	run_state_machine_tests(); /* Phase 3 */
 	run_wait_queue_tests(); /* Phase 4 */
 	run_reconnect_tests(); /* Phase 5 */
+	run_reaper_tests(); /* Phase 5 */
 
 	printf("%d/%d tests passed\n", tests_passed,
 	       tests_passed + tests_failed);

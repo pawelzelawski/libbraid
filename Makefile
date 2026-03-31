@@ -73,7 +73,7 @@ endif
 ALL_LIB_SRCS = $(LIB_SRCS) $(PLATFORM_SRCS)
 
 # Test source files
-TEST_SRCS = tests/run_tests.c tests/test_table.c tests/test_state_machine.c tests/test_wait_queue.c tests/test_reconnect.c
+TEST_SRCS = tests/run_tests.c tests/test_table.c tests/test_state_machine.c tests/test_wait_queue.c tests/test_reconnect.c tests/test_reaper.c
 
 # Build output directories
 BUILD_DIR       = build
