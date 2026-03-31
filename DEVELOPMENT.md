@@ -14,7 +14,7 @@
 | 2 | Connection Table | COMPLETE | ✓ | Hash table, open addressing, tombstone, compaction |
 | 3 | Connection State Machine | COMPLETE | ✓ | conn_transition, record lifecycle, keepalive, socket creation |
 | 4 | Wait Queue | COMPLETE | ✓ | Ring buffer, cancel, timeout expiry, deferred work flags |
-| 5 | Reconnection Engine and Idle Reaper | NOT STARTED | — | Min-heaps, backoff, DNS, reap logic |
+| 5 | Reconnection Engine and Idle Reaper | IN PROGRESS | — | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | NOT STARTED | — | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | NOT STARTED | — | kqueue translation unit, all tests on OpenBSD |
 | 8 | Hardening, Benchmarks, and Release | NOT STARTED | — | Integration tests, benchmarks, README |
@@ -35,7 +35,7 @@
 | M10 | Hash table lookup correct under collision — verified by test | DONE |
 | M11 | State machine rejects all illegal transitions — verified by test | NOT STARTED |
 | M12 | One callback per checkout guaranteed — verified by test | DONE |
-| M13 | Backoff exponent overflow guard verified by test | NOT STARTED |
+| M13 | Backoff exponent overflow guard verified by test | DONE |
 | M14 | Reaper min_connections floor verified by test | NOT STARTED |
 | M15 | Re-entrancy: checkin from checkout callback safe — verified by test | NOT STARTED |
 | M16 | Integration test suite passes on Linux | NOT STARTED |
@@ -444,12 +444,12 @@ reaper respects the `min_connections` floor. Both components drive
 - [x] Implement `reconnect_heap_init(heap, cap)`: allocate `cap` entries
 - [x] Implement `reconnect_heap_destroy(heap)`: free entries
 
-**5.2 — Backoff algorithm**
-- Add `uint64_t prng` field to `braid_pool_t` in `src/braid_internal.h`.
+**5.2 — Backoff algorithm** ✓ DONE
+- [x] Add `uint64_t prng` field to `braid_pool_t` in `src/braid_internal.h`.
   Seed at pool creation using `getentropy()` on Linux/OpenBSD (or
   `arc4random_buf()` on OpenBSD). This is the per-pool PRNG state.
   See ARCHITECTURE.md §6.2.
-- Implement `reconnect_backoff_delay(pool, attempt)`:
+- [x] Implement `reconnect_backoff_delay(pool, attempt)`:
   `exp = (attempt < 31) ? attempt : 31`;
   `window = (uint64_t)config->backoff_base << exp`;
   `if (window > config->backoff_cap) window = config->backoff_cap`;

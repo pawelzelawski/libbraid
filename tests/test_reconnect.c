@@ -18,7 +18,6 @@
 #include "test_harness.h"
 
 /* ── heap helpers ────────────────────────────────────────────────────── */
-
 static braid_reconnect_heap_t *
 make_heap(uint32_t cap)
 {
@@ -49,6 +48,28 @@ make_entry(uint64_t next_retry_ms, uint32_t attempt)
 	e.next_retry_ms = next_retry_ms;
 	e.attempt = attempt;
 	return e;
+}
+
+/* ── backoff helpers ─────────────────────────────────────────────────── */
+
+/*
+ * Allocate a minimal braid_pool_t with PRNG seeded and backoff config set.
+ * No sub-structures are initialised — the pool is only suitable for
+ * calling reconnect_backoff_delay(). Caller must free() the returned pointer.
+ */
+static braid_pool_t *
+make_pool_for_backoff(uint64_t seed, uint32_t backoff_base,
+		      uint32_t backoff_cap)
+{
+	braid_pool_t *pool;
+
+	pool = calloc(1, sizeof(*pool));
+	if (pool == NULL)
+		return NULL;
+	pool->prng = seed;
+	pool->config.backoff_base = backoff_base;
+	pool->config.backoff_cap = backoff_cap;
+	return pool;
 }
 
 /* ── test cases ──────────────────────────────────────────────────────── */
@@ -213,6 +234,155 @@ test_heap_clear_resets_count(void)
 
 /* ── test suite entry point ──────────────────────────────────────────── */
 
+/*
+ * attempt=0 → exp=0, window = backoff_base × 1 = 100.
+ * All 1000 sampled delays must be in [0, 100].
+ */
+static void
+test_backoff_attempt_0(void)
+{
+	braid_pool_t *pool;
+	uint64_t delay;
+	int all_ok;
+	uint32_t i;
+
+	pool = make_pool_for_backoff(0x1234567890abcdefULL, 100, 30000);
+	if (pool == NULL) {
+		CHECK("backoff_attempt_0: alloc", 0);
+		return;
+	}
+	all_ok = 1;
+	for (i = 0; i < 1000; i++) {
+		delay = reconnect_backoff_delay(pool, 0);
+		if (delay > 100) {
+			all_ok = 0;
+			break;
+		}
+	}
+	CHECK("backoff_attempt_0: all delays in [0, 100]", all_ok);
+	free(pool);
+}
+
+/*
+ * attempt=5 → exp=5, window = min(30000, 100 × 32) = 3200.
+ * All 1000 sampled delays must be in [0, 3200].
+ */
+static void
+test_backoff_attempt_5(void)
+{
+	braid_pool_t *pool;
+	uint64_t delay;
+	int all_ok;
+	uint32_t i;
+
+	pool = make_pool_for_backoff(0xdeadbeefcafe0000ULL, 100, 30000);
+	if (pool == NULL) {
+		CHECK("backoff_attempt_5: alloc", 0);
+		return;
+	}
+	all_ok = 1;
+	for (i = 0; i < 1000; i++) {
+		delay = reconnect_backoff_delay(pool, 5);
+		if (delay > 3200) {
+			all_ok = 0;
+			break;
+		}
+	}
+	CHECK("backoff_attempt_5: all delays in [0, 3200]", all_ok);
+	free(pool);
+}
+
+/*
+ * attempt=31 → exp capped at 31; window = 100 × 2^31 = 214748364800,
+ * then capped to backoff_cap (30000). UBSan verifies no overflow.
+ * All 1000 sampled delays must be in [0, 30000].
+ */
+static void
+test_backoff_attempt_31(void)
+{
+	braid_pool_t *pool;
+	uint64_t delay;
+	int all_ok;
+	uint32_t i;
+
+	pool = make_pool_for_backoff(0xabcdef1234567890ULL, 100, 30000);
+	if (pool == NULL) {
+		CHECK("backoff_attempt_31: alloc", 0);
+		return;
+	}
+	all_ok = 1;
+	for (i = 0; i < 1000; i++) {
+		delay = reconnect_backoff_delay(pool, 31);
+		if (delay > 30000) {
+			all_ok = 0;
+			break;
+		}
+	}
+	CHECK("backoff_attempt_31: all delays in [0, 30000]", all_ok);
+	free(pool);
+}
+
+/*
+ * attempt=64 → exponent clamped to 31 (overflow guard).
+ * With identical PRNG seed, attempt=64 must produce the same first delay
+ * as attempt=31 — proving that both hit the same window=30000 path.
+ * Without the clamp, (uint64_t)base << 64 would be undefined behaviour.
+ */
+static void
+test_backoff_attempt_64(void)
+{
+	braid_pool_t *pool31, *pool64;
+	uint64_t delay31, delay64;
+
+	pool31 = make_pool_for_backoff(0xfeedfacedeadbeefULL, 100, 30000);
+	pool64 = make_pool_for_backoff(0xfeedfacedeadbeefULL, 100, 30000);
+	if (pool31 == NULL || pool64 == NULL) {
+		CHECK("backoff_attempt_64: alloc", 0);
+		free(pool31);
+		free(pool64);
+		return;
+	}
+	delay31 = reconnect_backoff_delay(pool31, 31);
+	delay64 = reconnect_backoff_delay(pool64, 64);
+	CHECK("backoff_attempt_64: delay matches attempt 31",
+	      delay31 == delay64);
+	CHECK("backoff_attempt_64: delay <= 30000", delay64 <= 30000);
+	free(pool31);
+	free(pool64);
+}
+
+/*
+ * backoff_cap is always an upper bound regardless of attempt.
+ * At attempt=50 the uncapped window would be astronomically large;
+ * cap enforcement must ensure all 1000 sampled delays are <= 30000.
+ */
+static void
+test_backoff_cap_respected(void)
+{
+	braid_pool_t *pool;
+	uint64_t delay;
+	int all_ok;
+	uint32_t i;
+
+	pool = make_pool_for_backoff(0xcafebabe12345678ULL, 100, 30000);
+	if (pool == NULL) {
+		CHECK("backoff_cap_respected: alloc", 0);
+		return;
+	}
+	all_ok = 1;
+	for (i = 0; i < 1000; i++) {
+		delay = reconnect_backoff_delay(pool, 50);
+		if (delay > 30000) {
+			all_ok = 0;
+			break;
+		}
+	}
+	CHECK("backoff_cap_respected: all delays <= backoff_cap", all_ok);
+	free(pool);
+}
+
+/* ── test suite entry point ──────────────────────────────────────────── */
+
 void
 run_reconnect_tests(void)
 {
@@ -221,4 +391,9 @@ run_reconnect_tests(void)
 	test_heap_peek_returns_minimum();
 	test_heap_push_full_returns_error();
 	test_heap_clear_resets_count();
+	test_backoff_attempt_0();
+	test_backoff_attempt_5();
+	test_backoff_attempt_31();
+	test_backoff_attempt_64();
+	test_backoff_cap_respected();
 }
