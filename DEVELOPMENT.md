@@ -3,15 +3,15 @@
 ## Status Overview
 
 **Last Updated**: 2026-03-31
-**Current Phase**: Phase 1 — Foundation (complete)
-**Next Task**: Phase 2 — Connection Table (task 2.1)
+**Current Phase**: Phase 2 — Connection Table (complete)
+**Next Task**: Phase 3 — Connection State Machine (task 3.1)
 
 ### Phase Summary
 
 | Phase | Name | Status | Tests | Notes |
 |---|---|---|---|---|
 | 1 | Foundation | COMPLETE | ✓ | Build system, test harness, mock clock, skeleton |
-| 2 | Connection Table | NOT STARTED | — | Hash table, open addressing, tombstone, compaction |
+| 2 | Connection Table | COMPLETE | ✓ | Hash table, open addressing, tombstone, compaction |
 | 3 | Connection State Machine | NOT STARTED | — | conn_transition, record lifecycle, keepalive, socket creation |
 | 4 | Wait Queue | NOT STARTED | — | Ring buffer, cancel, timeout expiry, deferred work flags |
 | 5 | Reconnection Engine and Idle Reaper | NOT STARTED | — | Min-heaps, backoff, DNS, reap logic |
@@ -32,7 +32,7 @@
 | M7 | TSan clean on Linux | NOT STARTED |
 | M8 | clang-format clean | NOT STARTED |
 | M9 | clang-tidy zero warnings | NOT STARTED |
-| M10 | Hash table lookup correct under collision — verified by test | NOT STARTED |
+| M10 | Hash table lookup correct under collision — verified by test | DONE |
 | M11 | State machine rejects all illegal transitions — verified by test | NOT STARTED |
 | M12 | One callback per checkout guaranteed — verified by test | NOT STARTED |
 | M13 | Backoff exponent overflow guard verified by test | NOT STARTED |
@@ -200,23 +200,23 @@ correctly. No allocation after `table_init()`.
   `fd = -1`. No compaction — inline `conn->tag` addresses must remain
   stable. See ARCHITECTURE.md §3.3.
 
-**2.3 — Tests (`tests/test_table.c`)**
-- Implement all test cases from TESTING.md §3.1:
+**2.3 — Tests (`tests/test_table.c`)** ✓ DONE (2026-03-31)
+- [x] Implement all test cases from TESTING.md §3.1:
   `test_insert_and_lookup`, `test_probe_chain_collision`,
   `test_tombstone_skip_on_lookup`, `test_delete_vacates_slot`,
   `test_tombstone_reuse_on_insert`, `test_table_full_returns_error`,
   `test_fd_zero_valid_key`
-- Register all tests in `run_tests.c`
-- All tests pass with Valgrind and ASan/UBSan clean
+- [x] Register all tests in `run_tests.c`
+- [x] All tests pass with Valgrind and ASan/UBSan clean (26/26)
 
 ### Phase 2 Completion Criteria
 
-- [ ] All `test_table.c` tests pass on Linux
-- [ ] Valgrind clean; ASan/UBSan clean
-- [ ] `table_lookup` O(1) average verified by probe-chain test
-- [ ] Tombstone reuse verified — no compaction function exists in codebase
-- [ ] No `malloc` after `table_init()` — verified by inspection
-- [ ] Quality milestone M10 confirmed
+- [x] All `test_table.c` tests pass on Linux (26/26)
+- [x] Valgrind clean; ASan/UBSan clean
+- [x] `table_lookup` O(1) average verified by probe-chain test
+- [x] Tombstone reuse verified — no compaction function exists in codebase
+- [x] No `malloc` after `table_init()` — verified by inspection
+- [x] Quality milestone M10 confirmed
 
 ---
 
