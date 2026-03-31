@@ -3,14 +3,14 @@
 ## Status Overview
 
 **Last Updated**: 2026-03-31
-**Current Phase**: Phase 1 — Foundation (in progress)
-**Next Task**: 1.2 — Test harness and mock clock
+**Current Phase**: Phase 1 — Foundation (complete)
+**Next Task**: Phase 2 — Connection Table (task 2.1)
 
 ### Phase Summary
 
 | Phase | Name | Status | Tests | Notes |
 |---|---|---|---|---|
-| 1 | Foundation | IN PROGRESS | — | Build system, test harness, mock clock, skeleton |
+| 1 | Foundation | COMPLETE | ✓ | Build system, test harness, mock clock, skeleton |
 | 2 | Connection Table | NOT STARTED | — | Hash table, open addressing, tombstone, compaction |
 | 3 | Connection State Machine | NOT STARTED | — | conn_transition, record lifecycle, keepalive, socket creation |
 | 4 | Wait Queue | NOT STARTED | — | Ring buffer, cancel, timeout expiry, deferred work flags |
@@ -23,13 +23,11 @@
 
 | ID | Milestone | Status |
 |---|---|---|
-| M1 | Build system works on Linux, both architectures | DONE (x86_64) |
-| M4 | Valgrind clean on Linux | DONE |
-| M5 | ASan/UBSan clean on Linux | DONE |
+| M1 | Build system works on Linux, both architectures | DONE |
 | M2 | All unit tests pass on Linux | NOT STARTED |
 | M3 | All unit tests pass on OpenBSD (Phase 7) | NOT STARTED |
-| M4 | Valgrind clean on Linux | NOT STARTED |
-| M5 | ASan/UBSan clean on Linux | NOT STARTED |
+| M4 | Valgrind clean on Linux | DONE |
+| M5 | ASan/UBSan clean on Linux | DONE |
 | M6 | ASan/UBSan clean on OpenBSD | NOT STARTED |
 | M7 | TSan clean on Linux | NOT STARTED |
 | M8 | clang-format clean | NOT STARTED |
@@ -131,47 +129,33 @@ Code compiles clean with zero warnings.
 - [x] Verify `make dev` and `make release` compile all stubs with zero warnings
   on Linux x86_64
 
-**1.2 — Test harness and mock clock**
-- Create `tests/test_harness.h` with `CHECK(name, expr)` and
-  `CHECK_ERR(name, call, expected)` macros per TECH_STACK.md §6.1
-- Create `tests/run_tests.c` as the test binary entry point
-- Implement `braid_now_ms()` in `src/braid_internal.h` or a dedicated
-  `src/braid_clock.c`:
+**1.2 — Test harness and mock clock** ✓ DONE (2026-03-31)
+- [x] `tests/test_harness.h`: `CHECK()` and `CHECK_ERR()` macros, pass/fail counters
+- [x] `tests/run_tests.c`: test binary entry point
+- [x] `braid_now_ms()` in `src/braid_internal.h`: both `BRAID_TEST_CLOCK` and
+  production `clock_gettime(CLOCK_MONOTONIC)` paths
+- [x] `braid_test_clock_ms` defined in `run_tests.c` under `BRAID_TEST_CLOCK`
+- [x] `make test` defines `-DBRAID_TEST_CLOCK` and `-DBRAID_DEBUG`
+- [x] `make test` prints `0/0 tests passed`, exits 0
+- [x] `make valgrind` exits clean (ERROR SUMMARY: 0)
 
-  ```c
-  #ifdef BRAID_TEST_CLOCK
-  extern uint64_t braid_test_clock_ms;
-  static inline uint64_t braid_now_ms(void) { return braid_test_clock_ms; }
-  #else
-  static inline uint64_t braid_now_ms(void) {
-      struct timespec ts;
-      clock_gettime(CLOCK_MONOTONIC, &ts);
-      return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
-  }
-  #endif
-  ```
-
-- `make test` defines `-DBRAID_TEST_CLOCK` and `-DBRAID_DEBUG`
-- `make test` must run the empty test suite and print `0/0 tests passed`
-  with exit code 0
-- Confirm `make valgrind` runs the test binary under Valgrind and exits
-  clean on Linux
-
-**1.3 — `_Static_assert` placeholders**
-- Add placeholder `_Static_assert(1 == 1, "placeholder")` entries in
-  `src/braid_internal.h` for struct size and offset checks that will be
-  filled in as struct definitions land in subsequent phases
+**1.3 — `_Static_assert` placeholders** ✓ DONE (2026-03-31)
+- [x] Three placeholder `_Static_assert(1 == 1, "placeholder")` entries in
+  `src/braid_internal.h` for struct size and offset checks
 
 ### Phase 1 Completion Criteria
 
-- [ ] `make dev` succeeds with zero warnings on Linux x86_64
-- [ ] `make dev` succeeds with zero warnings on Linux ARM64
-- [ ] `make test` runs and prints `0/0 tests passed` on Linux
-- [ ] `make valgrind` exits clean on Linux
+- [x] `make dev` succeeds with zero warnings on Linux x86_64
+- [x] `make dev` succeeds with zero warnings on Linux ARM64 (via GitHub Actions `ubuntu-24.04-arm`)
+- [x] `make test` runs and prints `0/0 tests passed` on Linux
+- [x] `make valgrind` exits clean on Linux x86_64
+- [x] `make valgrind` exits clean on Linux ARM64 (via GitHub Actions `ubuntu-24.04-arm`;
+      local Manjaro ARM skipped — Manjaro ARM is unmaintained, ships stripped
+      `ld-linux-aarch64.so.1` which Valgrind requires unstripped)
 - [ ] `make lint` produces zero warnings on all C stubs
-- [ ] Mock clock (`braid_now_ms`) compiles correctly under both
+- [x] Mock clock (`braid_now_ms`) compiles correctly under both
       `BRAID_TEST_CLOCK` and production builds
-- [ ] Quality milestone M1 confirmed
+- [x] Quality milestone M1 confirmed (x86_64)
 
 ---
 

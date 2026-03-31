@@ -18,8 +18,8 @@
 OS := $(shell uname -s)
 
 # Compiler — Clang primary (required), GCC secondary
-# Override by setting CC=gcc on the command line for GCC validation builds.
-CC ?= clang
+# Override on the command line for GCC validation: make CC=gcc
+CC = clang
 
 # Compiler flags
 CFLAGS_COMMON = -std=c11 -Wall -Wextra -Wpedantic			\
@@ -28,7 +28,7 @@ CFLAGS_COMMON = -std=c11 -Wall -Wextra -Wpedantic			\
                 -D_XOPEN_SOURCE=700
 
 CFLAGS_DEV    = $(CFLAGS_COMMON)					\
-                -O0 -g3 -Werror					\
+                -O0 -g3 -gdwarf-4 -Werror				\
                 -fsanitize=address,undefined				\
                 -fno-omit-frame-pointer				\
                 -DBRAID_DEBUG
@@ -88,8 +88,8 @@ TEST_BIN    = $(BUILD_TESTS_DIR)/run_tests
 LIB_OBJS_DEV  = $(patsubst src/%.c,$(BUILD_DIR)/dev/%.o,$(ALL_LIB_SRCS))
 TEST_OBJS_DEV = $(patsubst tests/%.c,$(BUILD_DIR)/dev/tests/%.o,$(TEST_SRCS))
 
-# Object files (valgrind build — no sanitizers)
-CFLAGS_VG     = $(CFLAGS_COMMON) -O0 -g3 -DBRAID_DEBUG -DBRAID_TEST_CLOCK
+# Object files (valgrind build — no sanitizers, DWARF 4 for Valgrind compat)
+CFLAGS_VG     = $(CFLAGS_COMMON) -O0 -g3 -gdwarf-4 -DBRAID_DEBUG -DBRAID_TEST_CLOCK
 LIB_OBJS_VG   = $(patsubst src/%.c,$(BUILD_DIR)/vg/%.o,$(ALL_LIB_SRCS))
 TEST_OBJS_VG  = $(patsubst tests/%.c,$(BUILD_DIR)/vg/tests/%.o,$(TEST_SRCS))
 TEST_BIN_VG   = $(BUILD_TESTS_DIR)/run_tests_vg
