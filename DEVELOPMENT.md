@@ -175,14 +175,15 @@ correctly. No allocation after `table_init()`.
 
 ### Tasks
 
-**2.1 — Struct definitions**
-- Define `braid_conn_t` in `src/braid_internal.h` per ARCHITECTURE.md §3.2:
+**2.1 — Struct definitions** ✓ DONE (2026-03-31)
+- [x] Define `braid_conn_t` in `src/braid_internal.h` per ARCHITECTURE.md §3.2:
   `fd`, `state`, `conn_ctx`, `created_at_ms`, `last_active_ms`, `flags`,
-  `tag` pointer. `state` is `braid_state_t` (enum, values 0–5).
-- Define slot flag constants: `CONN_FLAG_TOMBSTONE`, `CONN_FLAG_CLOSING_DEFERRED`
-- Define `braid_state_t` enum: `BRAID_STATE_CONNECTING` through
+  `tag` (inline). `state` is `braid_state_t` (enum, values 0–5).
+- [x] Define slot flag constants: `CONN_FLAG_TOMBSTONE`, `CONN_FLAG_CLOSING_DEFERRED`
+- [x] Define `braid_state_t` enum: `BRAID_STATE_CONNECTING` through
   `BRAID_STATE_DEAD`
-- Add `_Static_assert` checks for struct sizes once definitions land
+- [x] Add `_Static_assert` checks: `sizeof(braid_conn_t)==48`,
+  `offsetof(braid_fd_tag_t, magic)==0`, `sizeof(pool) > sizeof(config)`
 
 **2.2 — Hash table implementation (`src/braid_table.c`)**
 - Implement `table_init(pool)`: allocate `2 × max_connections` slots of

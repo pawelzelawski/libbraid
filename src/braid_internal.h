@@ -220,12 +220,34 @@ struct braid_pool {
 };
 
 /*
- * _Static_assert placeholders.
- * These will be replaced with meaningful size/offset checks as struct
- * definitions land in subsequent phases.
+ * Struct size and layout assertions.
+ * Fail at compile time if a field change silently alters a struct that
+ * has externally-visible layout invariants.
  */
-_Static_assert(1 == 1, "placeholder — braid_conn_t size check");
-_Static_assert(1 == 1, "placeholder — braid_fd_tag_t alignment check");
-_Static_assert(1 == 1, "placeholder — braid_pool_t size check");
+
+/*
+ * braid_conn_t: on LP64 (x86_64, arm64) the fields pack to exactly 48
+ * bytes with no padding — every field is naturally aligned.  If this
+ * fires, a field was added, removed, or reordered; review the impact on
+ * the hash table slot array and epoll tag pointer stability.
+ */
+_Static_assert(sizeof(braid_conn_t) == 48,
+	       "braid_conn_t: unexpected size; check field layout");
+
+/*
+ * braid_fd_tag_t: the magic field must sit at offset 0 so that a
+ * braid_fd_tag_t * recovered from epoll_data.ptr can be authenticated
+ * by reading the first four bytes before any cast.
+ */
+_Static_assert(
+    offsetof(braid_fd_tag_t, magic) == 0,
+    "braid_fd_tag_t: magic must be at offset 0 for epoll authentication");
+
+/*
+ * braid_pool_t: the pool struct must be strictly larger than its
+ * embedded config, confirming that all internal-state fields are present.
+ */
+_Static_assert(sizeof(struct braid_pool) > sizeof(braid_config_t),
+	       "braid_pool_t: missing internal fields");
 
 #endif /* BRAID_INTERNAL_H */
