@@ -504,8 +504,8 @@ reaper respects the `min_connections` floor. Both components drive
   initialise count to 0
 - [x] Implement `reaper_heap_destroy(heap)`: free entries array
 
-**5.5 — Reaper advance logic**
-- Implement `reaper_advance(pool, now_ms)` per ARCHITECTURE.md §7.2:
+**5.5 — Reaper advance logic** ✓ DONE
+- [x] Implement `reaper_advance(pool, now_ms)` per ARCHITECTURE.md §7.2:
   peek heap minimum; if `now_ms - min.last_active_ms >=
   config.idle_reap_timeout` AND live count > `min_connections`: look up
   connection by fd; call `conn_transition(→ CLOSING)`; repeat until

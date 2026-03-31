@@ -11,8 +11,11 @@
 #include <string.h>
 
 #include "../include/braid.h"
+#include "braid_conn.h"
 #include "braid_internal.h"
 #include "braid_reaper.h"
+
+#define BRAID_DEFAULT_IDLE_REAP_TIMEOUT 300000 /* milliseconds */
 
 /*
  * Test-visible call counters — incremented by insert and remove so that
@@ -190,13 +193,30 @@ reaper_heap_peek(braid_idle_heap_t *heap, braid_idle_entry_t *out)
 }
 
 /*
- * reaper_advance — reap eligible idle connections. Full implementation
- * in Phase 5.5.
+ * reaper_advance — reap eligible idle connections per ARCHITECTURE.md §7.2.
+ *
+ * Peeks the heap minimum on each iteration; stops when the heap is empty,
+ * the minimum was active too recently, or the min_connections floor would
+ * be breached.  conn_transition(→ CLOSING) removes the entry from the heap
+ * as an IDLE-exit invariant, so the heap advances automatically each loop.
  */
 int
 reaper_advance(braid_pool_t *pool, uint64_t now_ms)
 {
-	(void)pool;
-	(void)now_ms;
+	braid_idle_entry_t entry;
+	uint64_t timeout;
+
+	timeout = pool->config.idle_reap_timeout != 0
+		      ? (uint64_t)pool->config.idle_reap_timeout
+		      : BRAID_DEFAULT_IDLE_REAP_TIMEOUT;
+
+	while (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
+		if (now_ms - entry.last_active_ms < timeout)
+			break;
+		if (pool->live_count <= pool->config.min_connections)
+			break;
+		conn_transition(pool, entry.conn, BRAID_STATE_CLOSING);
+	}
+
 	return BRAID_OK;
 }
