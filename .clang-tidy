@@ -1,0 +1,32 @@
+---
+# .clang-tidy — libbraid
+#
+# Static analysis configuration.
+# Target: zero warnings on all C translation units.
+# See TECH_STACK.md §7.4.
+
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -misc-include-cleaner
+
+CheckOptions:
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(src|include)/.*'
+...

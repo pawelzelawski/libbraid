@@ -1,0 +1,66 @@
+---
+# .clang-format — libbraid
+#
+# KNF (Kernel Normal Form) style for C11.
+# Tabs for indentation, 8-character display width.
+# 80-character line limit.
+# Function opening brace on its own line.
+# Control structure opening brace on same line.
+# Single-statement bodies without braces.
+#
+# See CODING_STANDARDS.md §1.1 and TECH_STACK.md §7.6.
+
+Language: C
+BasedOnStyle: LLVM
+
+# Indentation — tabs, 8-wide
+UseTab: Always
+TabWidth: 8
+IndentWidth: 8
+ContinuationIndentWidth: 4
+
+# Column limit
+ColumnLimit: 80
+
+# Braces
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction:      true
+  AfterControlStatement: false
+  AfterEnum:          false
+  AfterStruct:        false
+  AfterUnion:         false
+  BeforeElse:         false
+  IndentBraces:       false
+  SplitEmptyFunction: false
+  SplitEmptyRecord:   false
+
+# Allow single-statement bodies without braces
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# Function signatures — return type on its own line
+AlwaysBreakAfterReturnType: AllDefinitions
+
+# Pointer alignment — align * with the variable name (KNF style)
+PointerAlignment: Right
+
+# Spaces
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpacesBeforeTrailingComments: 1
+
+# Alignment
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: false
+
+# Misc
+SortIncludes: false
+ReflowComments: true
+MaxEmptyLinesToKeep: 1
+...

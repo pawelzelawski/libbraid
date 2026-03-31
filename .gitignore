@@ -1,0 +1,24 @@
+# libbraid .gitignore
+
+# Build artefacts
+build/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# clangd LSP
+compile_commands.json
+.cache/
+
+# Test and benchmark binaries (if built outside build/)
+run_tests
+run_tests_vg
+run_tests_tsan
+
+# cppcheck output
+cppcheck-output/

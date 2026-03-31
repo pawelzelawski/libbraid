@@ -1,0 +1,19 @@
+/*
+ * braid_io_epoll.c — Linux epoll implementation of the I/O abstraction layer
+ *
+ * io_watch(): epoll_ctl(EPOLL_CTL_ADD) with EPOLLET.
+ * io_modify(): epoll_ctl(EPOLL_CTL_MOD).
+ * io_unwatch(): epoll_ctl(EPOLL_CTL_DEL).
+ *
+ * epoll_data.ptr is set to &conn->tag (inline braid_fd_tag_t struct).
+ * Compiled on Linux only — excluded from the OpenBSD build.
+ * See ARCHITECTURE.md §8.1, §15.2.
+ */
+
+#include <stdint.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+
+#include "../include/braid.h"
+#include "braid_internal.h"
+#include "braid_io.h"
