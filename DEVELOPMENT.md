@@ -430,19 +430,19 @@ reaper respects the `min_connections` floor. Both components drive
 
 ### Tasks
 
-**5.1 — Reconnection heap (`src/braid_reconnect.c`)**
-- Define `braid_reconnect_entry_t` in `src/braid_internal.h`:
+**5.1 — Reconnection heap (`src/braid_reconnect.c`)** ✓ DONE
+- [x] Define `braid_reconnect_entry_t` in `src/braid_internal.h`:
   `next_retry_ms` (uint64_t), `attempt` (uint32_t)
-- Define `braid_reconnect_heap_t`: `braid_reconnect_entry_t *entries`,
+- [x] Define `braid_reconnect_heap_t`: `braid_reconnect_entry_t *entries`,
   `uint32_t count`, `uint32_t capacity`
-- Replace stub `reconnect_heap_push()` with full implementation:
+- [x] Replace stub `reconnect_heap_push()` with full implementation:
   O(log n) insert with bubble-up on `next_retry_ms`
-- Implement `reconnect_heap_peek(heap)`: return minimum `next_retry_ms`
+- [x] Implement `reconnect_heap_peek(heap)`: return minimum `next_retry_ms`
   or `UINT64_MAX` if empty
-- Implement `reconnect_heap_pop(heap)`: O(log n) delete-min with sift-down
-- Implement `reconnect_heap_clear(heap)`: set count to 0
-- Implement `reconnect_heap_init(heap, cap)`: allocate `cap` entries
-- Implement `reconnect_heap_destroy(heap)`: free entries
+- [x] Implement `reconnect_heap_pop(heap)`: O(log n) delete-min with sift-down
+- [x] Implement `reconnect_heap_clear(heap)`: set count to 0
+- [x] Implement `reconnect_heap_init(heap, cap)`: allocate `cap` entries
+- [x] Implement `reconnect_heap_destroy(heap)`: free entries
 
 **5.2 — Backoff algorithm**
 - Add `uint64_t prng` field to `braid_pool_t` in `src/braid_internal.h`.
