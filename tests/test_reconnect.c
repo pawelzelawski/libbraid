@@ -11,9 +11,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "../include/braid.h"
+#include "../src/braid_conn.h"
 #include "../src/braid_internal.h"
+#include "../src/braid_reaper.h"
 #include "../src/braid_reconnect.h"
 #include "../src/braid_table.h"
 #include "test_harness.h"
@@ -382,6 +386,42 @@ test_backoff_cap_respected(void)
 	free(pool);
 }
 
+/*
+ * Different pool seeds must yield different jitter sequences, preventing
+ * accidental cross-pool synchronisation when many pools reconnect together.
+ */
+static void
+test_backoff_per_pool_prng_differs(void)
+{
+	braid_pool_t *pool_a, *pool_b;
+	uint64_t a0, a1, a2;
+	uint64_t b0, b1, b2;
+
+	pool_a = make_pool_for_backoff(0x1111111111111111ULL, UINT32_MAX,
+				       UINT32_MAX);
+	pool_b = make_pool_for_backoff(0x2222222222222222ULL, UINT32_MAX,
+				       UINT32_MAX);
+	if (pool_a == NULL || pool_b == NULL) {
+		CHECK("backoff_per_pool_prng_differs: alloc", 0);
+		free(pool_a);
+		free(pool_b);
+		return;
+	}
+
+	a0 = reconnect_backoff_delay(pool_a, 0);
+	a1 = reconnect_backoff_delay(pool_a, 0);
+	a2 = reconnect_backoff_delay(pool_a, 0);
+	b0 = reconnect_backoff_delay(pool_b, 0);
+	b1 = reconnect_backoff_delay(pool_b, 0);
+	b2 = reconnect_backoff_delay(pool_b, 0);
+
+	CHECK("backoff_per_pool_prng_differs: sequences differ",
+	      a0 != b0 || a1 != b1 || a2 != b2);
+
+	free(pool_a);
+	free(pool_b);
+}
+
 /* ── reconnect_advance test infrastructure ───────────────────────────── */
 
 static int g_reconnect_event_count;
@@ -439,15 +479,63 @@ make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
 		free(pool);
 		return NULL;
 	}
+	if (reaper_heap_init(&pool->idle, max_connections) != BRAID_OK) {
+		table_destroy(pool);
+		reconnect_heap_destroy(&pool->reconnect);
+		free(pool);
+		return NULL;
+	}
 	return pool;
 }
 
 static void
 free_testpool(braid_pool_t *pool)
 {
+	reaper_heap_destroy(&pool->idle);
 	table_destroy(pool);
 	reconnect_heap_destroy(&pool->reconnect);
 	free(pool);
+}
+
+static braid_conn_t *
+find_live_conn(braid_pool_t *pool)
+{
+	uint32_t i;
+
+	for (i = 0; i < pool->table_size; i++) {
+		if (pool->table[i].fd >= 0)
+			return &pool->table[i];
+	}
+	return NULL;
+}
+
+static int
+fake_socket_create_fail(braid_pool_t *pool, struct addrinfo *ai, int *fd_out,
+			int *immediate_out)
+{
+	(void)pool;
+	(void)ai;
+	(void)fd_out;
+	(void)immediate_out;
+	return BRAID_ERR_SYSCALL;
+}
+
+static int
+fake_socket_create_immediate(braid_pool_t *pool, struct addrinfo *ai,
+			     int *fd_out, int *immediate_out)
+{
+	int fd;
+
+	(void)pool;
+	(void)ai;
+
+	fd = open("/dev/null", O_RDONLY);
+	if (fd < 0)
+		return BRAID_ERR_SYSCALL;
+
+	*fd_out = fd;
+	*immediate_out = 1;
+	return BRAID_OK;
 }
 
 /* ── reconnect_advance test cases ────────────────────────────────────── */
@@ -615,6 +703,83 @@ test_reconnect_attempt_event_fired(void)
 	free_testpool(pool);
 }
 
+/*
+ * Retry entries are inserted only on failure paths, not at attempt start.
+ * Force a connect failure via test hook and verify exactly one attempt+1
+ * entry is present after reconnect_advance() consumes the due entry.
+ */
+static void
+test_reconnect_entry_inserted_only_on_failure(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	reconnect_test_set_socket_create_hook(fake_socket_create_fail);
+	pool = make_testpool(8, 0, "127.0.0.1", 8080, NULL);
+	if (pool == NULL) {
+		CHECK("reconnect_entry_failure_only: alloc", 0);
+		reconnect_test_set_socket_create_hook(NULL);
+		return;
+	}
+
+	entry.attempt = 7;
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("reconnect_entry_failure_only: one retry enqueued",
+	      pool->reconnect.count == 1);
+	CHECK_ERR("reconnect_entry_failure_only: peek queued retry",
+		  reconnect_heap_peek(&pool->reconnect, &entry), BRAID_OK);
+	CHECK("reconnect_entry_failure_only: retry attempt incremented",
+	      entry.attempt == 8);
+
+	free_testpool(pool);
+	reconnect_test_set_socket_create_hook(NULL);
+}
+
+/*
+ * Fast-path connect (connect()==0) must reach IDLE directly without waiting
+ * on a writable event and must not pre-schedule a reconnect retry.
+ * The socket-create hook forces an immediate-connect path deterministically.
+ */
+static void
+test_connect_zero_fast_path_reaches_idle_without_writable_event(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+	braid_conn_t *conn;
+
+	reconnect_test_set_socket_create_hook(fake_socket_create_immediate);
+	pool = make_testpool(8, 0, "127.0.0.1", 8080, NULL);
+	if (pool == NULL) {
+		CHECK("connect_zero_fast_path: alloc", 0);
+		reconnect_test_set_socket_create_hook(NULL);
+		return;
+	}
+
+	entry.attempt = 0;
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("connect_zero_fast_path: no retry pre-inserted",
+	      pool->reconnect.count == 0);
+	conn = find_live_conn(pool);
+	CHECK("connect_zero_fast_path: connection created", conn != NULL);
+	if (conn != NULL)
+		CHECK("connect_zero_fast_path: state reached IDLE",
+		      conn->state == BRAID_STATE_IDLE);
+
+	if (conn != NULL && conn->state == BRAID_STATE_IDLE)
+		conn_transition(pool, conn, BRAID_STATE_CLOSING);
+
+	free_testpool(pool);
+	reconnect_test_set_socket_create_hook(NULL);
+}
+
 /* ── test suite entry point ──────────────────────────────────────────── */
 
 void
@@ -630,9 +795,12 @@ run_reconnect_tests(void)
 	test_backoff_attempt_31();
 	test_backoff_attempt_64();
 	test_backoff_cap_respected();
+	test_backoff_per_pool_prng_differs();
 	test_max_attempts_N_stops();
 	test_max_attempts_zero_retries_forever();
 	test_reconnect_advance_fires_due();
 	test_reconnect_advance_skips_future();
 	test_reconnect_attempt_event_fired();
+	test_reconnect_entry_inserted_only_on_failure();
+	test_connect_zero_fast_path_reaches_idle_without_writable_event();
 }

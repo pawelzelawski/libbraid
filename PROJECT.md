@@ -201,7 +201,7 @@ libbraid is **not** aimed at:
 ## Current Status
 
 **Architecture and documentation complete.** Implementation is complete
-through Phase 4.
+through Phase 5.
 
 | Phase | Name | Status |
 |---|---|---|
@@ -211,7 +211,7 @@ through Phase 4.
 | 2 | Connection Table | COMPLETE |
 | 3 | Connection State Machine | COMPLETE |
 | 4 | Wait Queue | COMPLETE |
-| 5 | Reconnection Engine and Idle Reaper | NOT STARTED |
+| 5 | Reconnection Engine and Idle Reaper | COMPLETE |
 | 6 | Pool Core | NOT STARTED |
 | 7 | OpenBSD (kqueue) port | NOT STARTED |
 | 8 | Hardening, benchmarks, and release | NOT STARTED |

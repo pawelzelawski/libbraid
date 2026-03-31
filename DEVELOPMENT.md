@@ -3,8 +3,8 @@
 ## Status Overview
 
 **Last Updated**: 2026-03-31
-**Current Phase**: Phase 4 complete
-**Next Task**: Phase 5 — Reconnection Engine and Idle Reaper
+**Current Phase**: Phase 5 complete
+**Next Task**: Phase 6 — Pool Core
 
 ### Phase Summary
 
@@ -14,7 +14,7 @@
 | 2 | Connection Table | COMPLETE | ✓ | Hash table, open addressing, tombstone, compaction |
 | 3 | Connection State Machine | COMPLETE | ✓ | conn_transition, record lifecycle, keepalive, socket creation |
 | 4 | Wait Queue | COMPLETE | ✓ | Ring buffer, cancel, timeout expiry, deferred work flags |
-| 5 | Reconnection Engine and Idle Reaper | IN PROGRESS | — | Min-heaps, backoff, DNS, reap logic |
+| 5 | Reconnection Engine and Idle Reaper | COMPLETE | ✓ | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | NOT STARTED | — | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | NOT STARTED | — | kqueue translation unit, all tests on OpenBSD |
 | 8 | Hardening, Benchmarks, and Release | NOT STARTED | — | Integration tests, benchmarks, README |
@@ -24,7 +24,7 @@
 | ID | Milestone | Status |
 |---|---|---|
 | M1 | Build system works on Linux, both architectures | DONE |
-| M2 | All unit tests pass on Linux | NOT STARTED |
+| M2 | All unit tests pass on Linux | DONE |
 | M3 | All unit tests pass on OpenBSD (Phase 7) | NOT STARTED |
 | M4 | Valgrind clean on Linux | DONE |
 | M5 | ASan/UBSan clean on Linux | DONE |
@@ -33,10 +33,10 @@
 | M8 | clang-format clean | NOT STARTED |
 | M9 | clang-tidy zero warnings | NOT STARTED |
 | M10 | Hash table lookup correct under collision — verified by test | DONE |
-| M11 | State machine rejects all illegal transitions — verified by test | NOT STARTED |
+| M11 | State machine rejects all illegal transitions — verified by test | DONE |
 | M12 | One callback per checkout guaranteed — verified by test | DONE |
 | M13 | Backoff exponent overflow guard verified by test | DONE |
-| M14 | Reaper min_connections floor verified by test | NOT STARTED |
+| M14 | Reaper min_connections floor verified by test | DONE |
 | M15 | Re-entrancy: checkin from checkout callback safe — verified by test | NOT STARTED |
 | M16 | Integration test suite passes on Linux | NOT STARTED |
 | M17 | Integration test suite passes on OpenBSD | NOT STARTED |

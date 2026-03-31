@@ -24,7 +24,27 @@
 #define BRAID_DEFAULT_BACKOFF_CAP 30000 /* milliseconds */
 #define BRAID_DEFAULT_INIT_TIMEOUT 10000 /* milliseconds */
 
+#ifdef BRAID_TEST_CLOCK
+static int (*reconnect_test_socket_create_hook)(braid_pool_t *,
+						struct addrinfo *, int *,
+						int *);
+#endif
+
 /* ── PRNG helpers ─────────────────────────────────────────────────────── */
+
+/*
+ * add_sat_u64 — saturating uint64_t addition.
+ *
+ * Used for reconnect scheduling and callback deadlines to avoid overflow.
+ * See CODING_STANDARDS.md §6.
+ */
+static uint64_t
+add_sat_u64(uint64_t a, uint64_t b)
+{
+	if (b > UINT64_MAX - a)
+		return UINT64_MAX;
+	return a + b;
+}
 
 /*
  * pool_prng_next — advance the per-pool xorshift64 PRNG and return the next
@@ -38,6 +58,9 @@ static uint64_t
 pool_prng_next(braid_pool_t *pool)
 {
 	uint64_t x = pool->prng;
+
+	if (x == 0)
+		x = 0x9e3779b97f4a7c15ULL;
 
 	x ^= x << 13;
 	x ^= x >> 7;
@@ -57,6 +80,16 @@ pool_prng_uniform(braid_pool_t *pool, uint64_t window)
 		return 0;
 	return pool_prng_next(pool) % (window + 1);
 }
+
+#ifdef BRAID_TEST_CLOCK
+void
+reconnect_test_set_socket_create_hook(int (*hook)(braid_pool_t *,
+						  struct addrinfo *, int *,
+						  int *))
+{
+	reconnect_test_socket_create_hook = hook;
+}
+#endif
 
 /* ── min-heap helpers ─────────────────────────────────────────────────── */
 
@@ -296,10 +329,13 @@ static void
 reconnect_schedule_retry(braid_pool_t *pool, uint32_t attempt)
 {
 	braid_reconnect_entry_t next;
+	uint64_t now_ms;
+	uint64_t delay_ms;
 
 	next.attempt = attempt + 1;
-	next.next_retry_ms =
-	    braid_now_ms() + reconnect_backoff_delay(pool, attempt + 1);
+	now_ms = braid_now_ms();
+	delay_ms = reconnect_backoff_delay(pool, attempt + 1);
+	next.next_retry_ms = add_sat_u64(now_ms, delay_ms);
 	reconnect_heap_push(&pool->reconnect,
 			    next); /* EXHAUSTED: best effort */
 }
@@ -349,7 +385,13 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 	}
 
 	/* Step 3: create socket, apply keepalive, non-blocking connect. */
-	rc = conn_socket_create(pool, res, &fd, &immediate);
+#ifdef BRAID_TEST_CLOCK
+	if (reconnect_test_socket_create_hook != NULL)
+		rc = reconnect_test_socket_create_hook(pool, res, &fd,
+						       &immediate);
+	else
+#endif
+		rc = conn_socket_create(pool, res, &fd, &immediate);
 	freeaddrinfo(res);
 	if (rc != BRAID_OK) {
 		reconnect_schedule_retry(pool, entry.attempt);
@@ -374,13 +416,15 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 
 		if (pool->config.init_fn != NULL) {
 			uint32_t timeout;
+			uint64_t now_ms;
 			uint64_t deadline;
 			int init_rc;
 
 			timeout = pool->config.init_timeout != 0
 				      ? pool->config.init_timeout
 				      : BRAID_DEFAULT_INIT_TIMEOUT;
-			deadline = braid_now_ms() + (uint64_t)timeout;
+			now_ms = braid_now_ms();
+			deadline = add_sat_u64(now_ms, (uint64_t)timeout);
 			pool->in_callback++;
 			init_rc = pool->config.init_fn(
 			    fd, &conn->conn_ctx, pool->config.hook_context,
