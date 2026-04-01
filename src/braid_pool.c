@@ -57,6 +57,69 @@ pool_drain_deferred(braid_pool_t *pool)
 	}
 }
 
+/* ── pool_fire_event ────────────────────────────────────────────────── */
+
+/*
+ * pool_fire_event — fire a pool-level observable event via observe_fn.
+ * Does NOT use the in_callback protocol — observe_fn is expected to be
+ * a passive logging/metrics hook that does not call back into libbraid.
+ * Pool-level events carry no connection fd; fd is set to -1.
+ */
+static void
+pool_fire_event(braid_pool_t *pool, braid_event_type_t type)
+{
+	braid_event_t ev;
+
+	if (pool->config.observe_fn == NULL)
+		return;
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = type;
+	ev.fd = -1;
+	pool->config.observe_fn(&ev, pool->config.hook_context);
+}
+
+/* ── pool_serve_waiter ───────────────────────────────────────────────── */
+
+/*
+ * pool_serve_waiter — promote one IDLE connection to ACTIVE and serve the
+ * wait queue head.
+ *
+ * Scans the connection table for any IDLE slot.  If found, transitions it
+ * IDLE→ACTIVE with the full in_callback protocol and calls
+ * waitq_serve_head() to fire the oldest pending checkout callback.
+ *
+ * Must be called with pool->in_callback == 0.
+ * Returns BRAID_OK if a waiter was served, BRAID_ERR_EXHAUSTED if no
+ * IDLE connection or no waiter was available.
+ */
+static int
+pool_serve_waiter(braid_pool_t *pool)
+{
+	uint32_t i;
+
+	if (pool->waitq.count == 0)
+		return BRAID_ERR_EXHAUSTED;
+
+	for (i = 0; i < pool->table_size; i++) {
+		braid_conn_t *conn = &pool->table[i];
+
+		if (conn->fd == -1 || (conn->flags & CONN_FLAG_TOMBSTONE))
+			continue;
+		if (conn->state != BRAID_STATE_IDLE)
+			continue;
+
+		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
+		pool->in_callback++;
+		waitq_serve_head(&pool->waitq, conn->fd, conn->conn_ctx);
+		pool->in_callback--;
+		if (pool->in_callback == 0 && pool->deferred_work != 0)
+			pool_drain_deferred(pool);
+		return BRAID_OK;
+	}
+	return BRAID_ERR_EXHAUSTED;
+}
+
 /* ── pool_active_count ───────────────────────────────────────────────── */
 
 /*
@@ -351,4 +414,167 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 	table_destroy(pool);
 	free((void *)pool->config.host);
 	free(pool);
+}
+
+/* ── braid_pool_checkout ─────────────────────────────────────────────── */
+
+/*
+ * braid_pool_checkout — acquire a connection from the pool.
+ *
+ * Scans the connection table for a valid IDLE connection.  If one is found
+ * and has not exceeded idle_threshold (or passes validate_fn), it is
+ * transitioned to ACTIVE and the callback cb is invoked immediately.
+ *
+ * If no IDLE connection is available and timeout_ms == 0, fires
+ * BRAID_EV_POOL_EXHAUSTED and returns BRAID_ERR_EXHAUSTED without invoking
+ * the callback.  With timeout_ms > 0, the waiter is enqueued; token is
+ * written to *token.  BRAID_EV_POOL_EXHAUSTED fires if the pool is at
+ * max_connections capacity.
+ *
+ * See ARCHITECTURE.md §13, DEVELOPMENT.md §6.4.
+ */
+int
+braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
+		    braid_checkout_cb cb, void *cb_ctx, braid_token_t *token)
+{
+	uint64_t now_ms;
+	uint32_t i;
+
+	if (pool->shutting_down)
+		return BRAID_ERR_SHUTDOWN;
+
+	now_ms = braid_now_ms();
+
+	/* Scan for a valid IDLE connection. */
+	for (i = 0; i < pool->table_size; i++) {
+		braid_conn_t *conn = &pool->table[i];
+
+		if (conn->fd == -1 || (conn->flags & CONN_FLAG_TOMBSTONE))
+			continue;
+		if (conn->state != BRAID_STATE_IDLE)
+			continue;
+
+		/*
+		 * Call validate_fn only when the idle_threshold has been
+		 * exceeded.  See ARCHITECTURE.md §4.3.
+		 */
+		if (pool->config.validate_fn != NULL &&
+		    now_ms >=
+			conn->last_active_ms + pool->config.idle_threshold) {
+			uint64_t deadline_ms;
+			int vrc;
+
+			deadline_ms = now_ms + pool->config.validate_timeout;
+			pool->in_callback++;
+			vrc = pool->config.validate_fn(
+			    conn->fd, conn->conn_ctx, pool->config.hook_context,
+			    deadline_ms);
+			pool->in_callback--;
+			if (pool->in_callback == 0 && pool->deferred_work != 0)
+				pool_drain_deferred(pool);
+
+			/*
+			 * Enforce validate_timeout even on success: if
+			 * validate_fn returned after deadline, treat as
+			 * failure.  See ARCHITECTURE.md §17.
+			 */
+			if (vrc != BRAID_OK || braid_now_ms() > deadline_ms) {
+				conn_transition(pool, conn,
+						BRAID_STATE_CLOSING);
+				continue;
+			}
+		}
+
+		/* Found a valid IDLE connection — serve immediately. */
+		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
+		pool->in_callback++;
+		cb(conn->fd, conn->conn_ctx, BRAID_OK, cb_ctx);
+		pool->in_callback--;
+		if (pool->in_callback == 0 && pool->deferred_work != 0)
+			pool_drain_deferred(pool);
+		return BRAID_OK;
+	}
+
+	/* No IDLE connection available. */
+	if (timeout_ms == 0) {
+		pool_fire_event(pool, BRAID_EV_POOL_EXHAUSTED);
+		return BRAID_ERR_EXHAUSTED;
+	}
+
+	/* Enqueue a waiter for when a connection becomes available. */
+	{
+		braid_token_t tok;
+		uint64_t deadline_ms;
+		int rc;
+
+		deadline_ms = now_ms + (uint64_t)timeout_ms;
+		rc = waitq_enqueue(&pool->waitq, cb, cb_ctx, deadline_ms, &tok);
+		if (rc != BRAID_OK)
+			return rc;
+
+		if (token != NULL)
+			*token = tok;
+
+		/*
+		 * Fire BRAID_EV_POOL_EXHAUSTED when every connection slot is
+		 * occupied (live_count >= max_connections).  See DEVELOPMENT.md
+		 * §6.4.
+		 */
+		if (pool->live_count >= pool->config.max_connections)
+			pool_fire_event(pool, BRAID_EV_POOL_EXHAUSTED);
+	}
+
+	return BRAID_OK;
+}
+
+/* ── braid_pool_checkin ──────────────────────────────────────────────── */
+
+/*
+ * braid_pool_checkin — return or discard an ACTIVE connection.
+ *
+ * BRAID_CONN_OK: transition ACTIVE→IDLE and serve any pending wait queue
+ *   head, subject to the in_callback deferred work protocol.
+ * BRAID_CONN_DISCARD: transition ACTIVE→CLOSING→DEAD.
+ *
+ * Returns BRAID_ERR_INVAL if fd is not a recognised ACTIVE connection.
+ * See ARCHITECTURE.md §9, DEVELOPMENT.md §6.4.
+ */
+int
+braid_pool_checkin(braid_pool_t *pool, int fd, int flags)
+{
+	braid_conn_t *conn;
+	int rc;
+
+	rc = table_lookup(pool, fd, &conn);
+	if (rc != BRAID_OK)
+		return BRAID_ERR_INVAL;
+
+	BRAID_DEBUG_ASSERT(
+	    conn->state == BRAID_STATE_ACTIVE,
+	    "braid_pool_checkin: connection not in ACTIVE state");
+	if (conn->state != BRAID_STATE_ACTIVE)
+		return BRAID_ERR_INVAL;
+
+	if (flags == BRAID_CONN_OK) {
+		conn_transition(pool, conn, BRAID_STATE_IDLE);
+		/*
+		 * Serve wait queue unless we are inside a callback.
+		 * Re-entrancy guard: if in_callback > 0, a checkin from
+		 * within a checkout callback defers the serve so that the
+		 * outer callback's call stack is not re-entered.
+		 * See ARCHITECTURE.md §9.2.
+		 */
+		if (pool->in_callback == 0)
+			pool_serve_waiter(pool);
+		else
+			pool->deferred_work |= BRAID_DEFERRED_SERVE_WAITQUEUE;
+	} else if (flags == BRAID_CONN_DISCARD) {
+		conn_transition(pool, conn, BRAID_STATE_CLOSING);
+	} else {
+		BRAID_DEBUG_ASSERT(0,
+				   "braid_pool_checkin: unknown flags value");
+		return BRAID_ERR_INVAL;
+	}
+
+	return BRAID_OK;
 }

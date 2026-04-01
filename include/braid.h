@@ -94,6 +94,8 @@ typedef void (*braid_checkout_cb)(int fd, void *conn_ctx, int err,
 #define BRAID_EV_CONN_CREATED ((braid_event_type_t)0)
 #define BRAID_EV_CONN_DESTROYED ((braid_event_type_t)1)
 #define BRAID_EV_RECONNECT_ATTEMPT ((braid_event_type_t)2)
+#define BRAID_EV_POOL_EXHAUSTED ((braid_event_type_t)3)
+#define BRAID_EV_CHECKOUT_TIMEOUT ((braid_event_type_t)4)
 
 /*
  * Observability event struct.

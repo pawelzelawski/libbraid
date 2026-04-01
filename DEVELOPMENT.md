@@ -601,8 +601,8 @@ tests pass.
   any remaining registered fds; free all structures including
   `strdup`'d host.
 
-**6.4 — `braid_pool_checkout()` and `braid_pool_checkin()`**
-- Implement `braid_pool_checkout(pool, timeout_ms, cb, cb_ctx, *token)`:
+**6.4 — `braid_pool_checkout()` and `braid_pool_checkin()`** ✓ DONE
+- [x] Implement `braid_pool_checkout(pool, timeout_ms, cb, cb_ctx, *token)`:
   - Reject if pool shutting down: return `BRAID_ERR_SHUTDOWN`
   - Find any IDLE connection in table; if found, check
     `last_active_ms` against `idle_threshold`: if exceeded, call
@@ -616,7 +616,7 @@ tests pass.
   - Otherwise: compute `deadline_ms = braid_now_ms() + timeout_ms`;
     call `waitq_enqueue()`; write token; fire `BRAID_EV_POOL_EXHAUSTED`
     if pool at `max_connections`
-- Implement `braid_pool_checkin(pool, fd, flags)`:
+- [x] Implement `braid_pool_checkin(pool, fd, flags)`:
   - `table_lookup(fd)` — return `BRAID_ERR_INVAL` if not found
   - Assert `BRAID_STATE_ACTIVE` in debug build
   - If `flags == BRAID_CONN_OK`: call `conn_transition(→ IDLE)`; if
