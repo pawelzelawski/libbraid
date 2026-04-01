@@ -82,7 +82,8 @@ TEST_SRCS = tests/run_tests.c		\
 	    tests/test_wait_queue.c	\
 	    tests/test_reconnect.c	\
 	    tests/test_reaper.c		\
-	    tests/test_pool.c
+	    tests/test_pool.c		\
+	    tests/test_integration.c
 
 # --- Build paths -------------------------------------------------------------
 
