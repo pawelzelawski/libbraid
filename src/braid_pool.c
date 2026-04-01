@@ -25,6 +25,9 @@
 #include "braid_table.h"
 #include "braid_waitq.h"
 
+/* Forward declaration: defined after pool_fire_event and pool_active_count. */
+static int pool_serve_waiter(braid_pool_t *pool);
+
 /*
  * pool_drain_deferred — process all flagged deferred work.
  *
@@ -45,16 +48,26 @@
 void
 pool_drain_deferred(braid_pool_t *pool)
 {
-	if (pool->deferred_work & BRAID_DEFERRED_PROCESS_DEAD) {
-		pool->deferred_work &= ~BRAID_DEFERRED_PROCESS_DEAD;
-		/* Phase 6: iterate table, call conn_transition(→ DEAD)
-		 * for every conn with CONN_FLAG_CLOSING_DEFERRED set. */
-	}
+        uint32_t i;
 
-	if (pool->deferred_work & BRAID_DEFERRED_SERVE_WAITQUEUE) {
-		pool->deferred_work &= ~BRAID_DEFERRED_SERVE_WAITQUEUE;
-		/* Phase 6: call waitq_serve_head() if queue non-empty. */
-	}
+        if (pool->deferred_work & BRAID_DEFERRED_PROCESS_DEAD) {
+                pool->deferred_work &= ~BRAID_DEFERRED_PROCESS_DEAD;
+                for (i = 0; i < pool->table_size; i++) {
+                        braid_conn_t *conn = &pool->table[i];
+
+                        if (conn->fd == -1 ||
+                            (conn->flags & CONN_FLAG_TOMBSTONE))
+                                continue;
+                        if (conn->flags & CONN_FLAG_CLOSING_DEFERRED)
+                                conn_transition(pool, conn,
+                                                BRAID_STATE_DEAD);
+                }
+        }
+
+        if (pool->deferred_work & BRAID_DEFERRED_SERVE_WAITQUEUE) {
+                pool->deferred_work &= ~BRAID_DEFERRED_SERVE_WAITQUEUE;
+                pool_serve_waiter(pool);
+        }
 }
 
 /* ── pool_fire_event ────────────────────────────────────────────────── */
@@ -601,4 +614,132 @@ braid_pool_cancel(braid_pool_t *pool, braid_token_t token)
 		pool_drain_deferred(pool);
 
 	return rc;
+}
+
+/* -- braid_pool_advance -------------------------------------------------- */
+
+/*
+ * braid_pool_advance -- drive all timer-based pool work.
+ *
+ * Called once per event-loop iteration, before epoll_wait().  Execution
+ * order follows ARCHITECTURE.md s11:
+ *   1. Capture now_ms.
+ *   2. reconnect_advance() -- pop and attempt due reconnections.
+ *   2a. Enforce connect_timeout on all CONNECTING connections.
+ *   3. reaper_advance() -- close idle connections above idle_reap_timeout.
+ *   4. waitq_expire() -- fire BRAID_ERR_TIMEOUT for expired waiters.
+ *   5. pool_drain_deferred() if not inside a callback.
+ *   6. Write time-until-next-event (ms) to *next_ms; UINT32_MAX if idle.
+ *
+ * All callbacks fired here follow the in_callback deferred work protocol.
+ * See ARCHITECTURE.md s11, DEVELOPMENT.md s6.6.
+ */
+int
+braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
+{
+        uint64_t now_ms;
+        uint64_t earliest_ms;
+        uint32_t i;
+
+        now_ms = braid_now_ms();
+        earliest_ms = UINT64_MAX;
+
+        /* Step 2: process reconnection heap. */
+        reconnect_advance(pool, now_ms);
+        {
+                braid_reconnect_entry_t entry;
+
+                if (reconnect_heap_peek(&pool->reconnect, &entry) == BRAID_OK)
+                        if (entry.next_retry_ms < earliest_ms)
+                                earliest_ms = entry.next_retry_ms;
+        }
+
+        /*
+         * Step 2a: abort CONNECTING sockets that have exceeded
+         * connect_timeout.  conn_transition(DEAD) handles io_unwatch,
+         * close, live_count decrement, and reconnect entry insertion.
+         * Track the soonest future deadline for next_ms.
+         */
+        for (i = 0; i < pool->table_size; i++) {
+                braid_conn_t *conn = &pool->table[i];
+                uint64_t deadline_ms;
+
+                if (conn->fd == -1 || (conn->flags & CONN_FLAG_TOMBSTONE))
+                        continue;
+                if (conn->state != BRAID_STATE_CONNECTING)
+                        continue;
+
+                deadline_ms = conn->created_at_ms +
+                              (uint64_t)pool->config.connect_timeout;
+                if (now_ms > deadline_ms) {
+                        conn_transition(pool, conn, BRAID_STATE_DEAD);
+                } else {
+                        if (deadline_ms < earliest_ms)
+                                earliest_ms = deadline_ms;
+                }
+        }
+
+        /* Step 3: process idle reaper heap. */
+        reaper_advance(pool, now_ms);
+        {
+                braid_idle_entry_t entry;
+                uint64_t timeout_ms;
+
+                timeout_ms = pool->config.idle_reap_timeout != 0
+                                 ? (uint64_t)pool->config.idle_reap_timeout
+                                 : 300000;
+
+                if (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
+                        uint64_t fire_ms = entry.last_active_ms + timeout_ms;
+
+                        if (fire_ms < earliest_ms)
+                                earliest_ms = fire_ms;
+                }
+        }
+
+        /* Step 4: expire wait queue entries. */
+        waitq_expire(&pool->waitq, now_ms);
+        {
+                /*
+                 * Walk the occupied ring span to find the soonest
+                 * non-tombstone entry with a deadline.  The ring is FIFO
+                 * so the first live entry with a deadline is the soonest.
+                 */
+                uint32_t span = pool->waitq.tail - pool->waitq.head;
+                uint32_t j;
+
+                for (j = 0; j < span; j++) {
+                        braid_waiter_t *slot = &pool->waitq.slots[
+                            (pool->waitq.head + j) % pool->waitq.cap];
+
+                        if (slot->flags & WAITER_FLAG_TOMBSTONE)
+                                continue;
+                        if (slot->deadline_ms == 0)
+                                continue; /* no timeout */
+                        if (slot->deadline_ms < earliest_ms)
+                                earliest_ms = slot->deadline_ms;
+                        break; /* FIFO: first live entry is soonest */
+                }
+        }
+
+        /* Step 5: drain any work deferred from callbacks above. */
+        if (pool->in_callback == 0 && pool->deferred_work != 0)
+                pool_drain_deferred(pool);
+
+        /* Step 6: compute relative next_ms for epoll_wait timeout. */
+        if (next_ms != NULL) {
+                if (earliest_ms == UINT64_MAX) {
+                        *next_ms = UINT32_MAX;
+                } else if (earliest_ms <= now_ms) {
+                        *next_ms = 0;
+                } else {
+                        uint64_t delta = earliest_ms - now_ms;
+
+                        *next_ms = delta > (uint64_t)UINT32_MAX
+                                       ? UINT32_MAX
+                                       : (uint32_t)delta;
+                }
+        }
+
+        return BRAID_OK;
 }

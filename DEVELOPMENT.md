@@ -628,8 +628,8 @@ tests pass.
 - [x] Implement `braid_pool_cancel(pool, token)`: call `waitq_cancel(ring,
   token)` with `in_callback` protocol around callback invocation
 
-**6.6 — `braid_pool_advance()`**
-- Implement `braid_pool_advance(pool, *next_ms)` per ARCHITECTURE.md §11:
+**6.6 — `braid_pool_advance()`** ✓ DONE
+- [x] Implement `braid_pool_advance(pool, *next_ms)` per ARCHITECTURE.md §11:
   1. `now_ms = braid_now_ms()`
   2. `reconnect_advance(pool, now_ms)`; track heap minimum for `next_ms`
   2a. Scan CONNECTING connections: for each where
@@ -641,7 +641,7 @@ tests pass.
   5. `pool_drain_deferred(pool)` if `in_callback == 0`
   6. Write minimum of all next-event times to `*next_ms`;
      `UINT32_MAX` if no events scheduled. Return `BRAID_OK`.
-- Implement `pool_drain_deferred(pool)` fully: process
+- [x] Implement `pool_drain_deferred(pool)` fully: process
   `BRAID_DEFERRED_PROCESS_DEAD` (re-run DEAD transition for deferred
   connections), then `BRAID_DEFERRED_SERVE_WAITQUEUE` (call
   `waitq_serve_head()`). Internal function — no `braid_` prefix.
