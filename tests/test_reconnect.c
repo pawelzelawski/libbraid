@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -467,7 +466,7 @@ make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
 	pool->config.backoff_max_attempts = max_attempts;
 	pool->config.host = host;
 	pool->config.port = port;
-	epfd = epoll_create1(EPOLL_CLOEXEC);
+	epfd = make_event_fd();
 	if (epfd < 0) {
 		free(pool);
 		return NULL;

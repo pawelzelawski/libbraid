@@ -8,7 +8,8 @@
  *   validate_fn (threshold, failure), connect timeout, init_fn deadline.
  *
  * All timer-dependent tests advance braid_test_clock_ms directly.
- * An epoll fd is opened once per test that needs pool->config.event_fd.
+ * An event fd (epoll on Linux, kqueue on OpenBSD) is opened once per test
+ * that needs pool->config.event_fd via make_event_fd() in test_harness.h.
  * No sleep() or usleep() are used. No real DNS or network calls are made.
  *
  * See TESTING.md §3.6 for the full test catalogue.
@@ -20,7 +21,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -137,13 +137,14 @@ reset_counters(void)
 /* ── pool factory helpers ─────────────────────────────────────────────── */
 
 /*
- * make_epoll_fd — open a real epoll fd for use as pool->config.event_fd.
+ * make_epoll_fd — open a real event fd for use as pool->config.event_fd.
+ * Delegates to make_event_fd() from test_harness.h (platform-conditional).
  * Returns -1 on failure. Must be closed by caller.
  */
 static int
 make_epoll_fd(void)
 {
-	return epoll_create1(EPOLL_CLOEXEC);
+	return make_event_fd();
 }
 
 /*

@@ -51,4 +51,25 @@ extern int tests_failed;
 		}                                                              \
 	} while (0)
 
+/*
+ * make_event_fd — create a platform event fd for use as pool->config.event_fd.
+ * epoll on Linux, kqueue on OpenBSD/FreeBSD/NetBSD. Returns -1 on failure.
+ * Must be closed by the caller.
+ */
+#ifdef __linux__
+#include <sys/epoll.h>
+static inline int
+make_event_fd(void)
+{
+	return epoll_create1(EPOLL_CLOEXEC);
+}
+#else
+#include <sys/event.h>
+static inline int
+make_event_fd(void)
+{
+	return kqueue();
+}
+#endif
+
 #endif /* TEST_HARNESS_H */
