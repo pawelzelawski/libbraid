@@ -578,3 +578,27 @@ braid_pool_checkin(braid_pool_t *pool, int fd, int flags)
 
 	return BRAID_OK;
 }
+/* ── braid_pool_cancel ───────────────────────────────────────────────── */
+
+/*
+ * braid_pool_cancel — cancel a pending checkout by token.
+ *
+ * Wraps waitq_cancel() with the in_callback protocol so that any deferred
+ * work triggered by the cancellation callback is drained before we return.
+ * If the token is stale (already served, expired, or wrapped around) the
+ * cancel is a silent no-op. See ARCHITECTURE.md §9.2, DEVELOPMENT.md §6.5.
+ */
+int
+braid_pool_cancel(braid_pool_t *pool, braid_token_t token)
+{
+	int rc;
+
+	pool->in_callback++;
+	rc = waitq_cancel(&pool->waitq, token);
+	pool->in_callback--;
+
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
+
+	return rc;
+}

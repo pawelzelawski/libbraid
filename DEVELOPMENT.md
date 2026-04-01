@@ -624,8 +624,8 @@ tests pass.
     else set `BRAID_DEFERRED_SERVE_WAITQUEUE`
   - If `flags == BRAID_CONN_DISCARD`: call `conn_transition(→ CLOSING)`
 
-**6.5 — `braid_pool_cancel()`**
-- Implement `braid_pool_cancel(pool, token)`: call `waitq_cancel(ring,
+**6.5 — `braid_pool_cancel()`** ✓ DONE
+- [x] Implement `braid_pool_cancel(pool, token)`: call `waitq_cancel(ring,
   token)` with `in_callback` protocol around callback invocation
 
 **6.6 — `braid_pool_advance()`**
