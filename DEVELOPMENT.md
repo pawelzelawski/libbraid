@@ -576,22 +576,22 @@ tests pass.
   table, reconnection heap, idle reaper heap, wait queue ring, live
   connection count, shutdown flag, `in_callback`, `deferred_work`
 
-**6.2 — epoll abstraction layer (`src/braid_io_epoll.c`)**
-- Implement `io_watch(pool, fd, events)`: `epoll_ctl(EPOLL_CTL_ADD)` with
+**6.2 — epoll abstraction layer (`src/braid_io_epoll.c`)** ✓ DONE
+- [x] Implement `io_watch(pool, fd, events)`: `epoll_ctl(EPOLL_CTL_ADD)` with
   `EPOLLET`; `epoll_data.ptr = conn->tag`. See ARCHITECTURE.md §8.1.
-- Implement `io_modify(pool, fd, events)`: `epoll_ctl(EPOLL_CTL_MOD)`
-- Implement `io_unwatch(pool, fd)`: `epoll_ctl(EPOLL_CTL_DEL)`
-- Translate `BRAID_IO_READ` → `EPOLLIN`, `BRAID_IO_WRITE` → `EPOLLOUT`
+- [x] Implement `io_modify(pool, fd, events)`: `epoll_ctl(EPOLL_CTL_MOD)`
+- [x] Implement `io_unwatch(pool, fd)`: `epoll_ctl(EPOLL_CTL_DEL)`
+- [x] Translate `BRAID_IO_READ` → `EPOLLIN`, `BRAID_IO_WRITE` → `EPOLLOUT`
 
-**6.3 — `braid_pool_create()` and `braid_pool_destroy()`**
-- Implement `braid_pool_create(config, *err)` per ARCHITECTURE.md §13.1:
+**6.3 — `braid_pool_create()` and `braid_pool_destroy()`** ✓ DONE
+- [x] Implement `braid_pool_create(config, *err)` per ARCHITECTURE.md §13.1:
   validate config (`event_fd >= 0`, `min_connections <= max_connections`,
   `max_connections > 0`); allocate `braid_pool_t`; call `table_init()`,
   `reconnect_heap_init()`, `reaper_heap_init()`, `waitq_init()`; deep-copy
   `config.host` via `strdup()`; insert `min_connections` reconnect entries
   with `next_retry_ms = 0`. Use `goto cleanup` for all failure paths.
   Apply default values for all zero config fields per ARCHITECTURE.md §16.
-- Implement `braid_pool_destroy(pool, drain_timeout_ms)` per
+- [x] Implement `braid_pool_destroy(pool, drain_timeout_ms)` per
   ARCHITECTURE.md §13.2: mark shutdown; `waitq_shutdown()`; if
   `drain_timeout_ms > 0`, poll with short sleeps waiting for ACTIVE
   connections; transition all CONNECTING sockets to DEAD via `io_unwatch()`
