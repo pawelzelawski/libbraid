@@ -20,6 +20,29 @@
 #include "braid_io.h"
 #include "braid_table.h"
 
+#ifdef BRAID_TEST_CLOCK
+static int kq_apply_calls;
+static int kq_apply_force_error_call;
+
+void
+io_kqueue_test_force_error_on_call(int call_no)
+{
+	kq_apply_force_error_call = call_no;
+}
+
+void
+io_kqueue_test_reset_apply_calls(void)
+{
+	kq_apply_calls = 0;
+}
+
+int
+io_kqueue_test_get_apply_calls(void)
+{
+	return kq_apply_calls;
+}
+#endif
+
 /*
  * kq_apply — submit a changelist of kevents to the caller's kqueue fd.
  * Returns BRAID_OK on success, BRAID_ERR_SYSCALL on hard failure.
@@ -29,6 +52,13 @@ static int
 kq_apply(int kqfd, struct kevent *changes, int nchanges)
 {
 	int ret;
+
+#ifdef BRAID_TEST_CLOCK
+	kq_apply_calls++;
+	if (kq_apply_force_error_call > 0 &&
+	    kq_apply_calls == kq_apply_force_error_call)
+		return BRAID_ERR_SYSCALL;
+#endif
 
 	ret = kevent(kqfd, changes, nchanges, NULL, 0, NULL);
 	if (ret == -1) {
@@ -70,6 +100,7 @@ io_modify(braid_pool_t *pool, int fd, uint32_t events)
 	braid_conn_t *conn;
 	struct kevent kev;
 	struct kevent adds[2];
+	int rc;
 	int n = 0;
 
 	if (table_lookup(pool, fd, &conn) != BRAID_OK) {
@@ -86,10 +117,14 @@ io_modify(braid_pool_t *pool, int fd, uint32_t events)
 	 * SAFETY: EV_DELETE does not dereference udata; pass NULL.
 	 */
 	EV_SET(&kev, (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-	kq_apply(pool->config.event_fd, &kev, 1);
+	rc = kq_apply(pool->config.event_fd, &kev, 1);
+	if (rc != BRAID_OK)
+		return rc;
 
 	EV_SET(&kev, (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-	kq_apply(pool->config.event_fd, &kev, 1);
+	rc = kq_apply(pool->config.event_fd, &kev, 1);
+	if (rc != BRAID_OK)
+		return rc;
 
 	if (events & BRAID_IO_READ)
 		EV_SET(&adds[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD, 0, 0,
@@ -108,13 +143,16 @@ int
 io_unwatch(braid_pool_t *pool, int fd)
 {
 	struct kevent kev;
+	int rc;
 
 	/*
 	 * Delete each filter individually: see io_modify comment above for
 	 * why a batch EV_DELETE can silently skip filters.
 	 */
 	EV_SET(&kev, (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-	kq_apply(pool->config.event_fd, &kev, 1);
+	rc = kq_apply(pool->config.event_fd, &kev, 1);
+	if (rc != BRAID_OK)
+		return rc;
 
 	EV_SET(&kev, (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
 	return kq_apply(pool->config.event_fd, &kev, 1);

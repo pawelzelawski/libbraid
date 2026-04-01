@@ -16,4 +16,11 @@ int io_watch(braid_pool_t *pool, int fd, uint32_t events);
 int io_modify(braid_pool_t *pool, int fd, uint32_t events);
 int io_unwatch(braid_pool_t *pool, int fd);
 
+#ifdef BRAID_TEST_CLOCK
+/* OpenBSD/FreeBSD/NetBSD only: kqueue test helpers. */
+void io_kqueue_test_force_error_on_call(int call_no);
+void io_kqueue_test_reset_apply_calls(void);
+int io_kqueue_test_get_apply_calls(void);
+#endif
+
 #endif /* BRAID_IO_H */

@@ -201,7 +201,7 @@ libbraid is **not** aimed at:
 ## Current Status
 
 **Architecture and documentation complete.** Implementation is complete
-through Phase 5.
+through Phase 7.
 
 | Phase | Name | Status |
 |---|---|---|
@@ -212,8 +212,8 @@ through Phase 5.
 | 3 | Connection State Machine | COMPLETE |
 | 4 | Wait Queue | COMPLETE |
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE |
-| 6 | Pool Core | NOT STARTED |
-| 7 | OpenBSD (kqueue) port | NOT STARTED |
+| 6 | Pool Core | COMPLETE |
+| 7 | OpenBSD (kqueue) port | COMPLETE |
 | 8 | Hardening, benchmarks, and release | NOT STARTED |
 
 ## Relationship to Existing Libraries
@@ -269,5 +269,5 @@ ISC License. Simple, permissive, compatible with OpenBSD philosophy.
 ---
 
 **Document Version**: 1.0
-**Last Updated**: 2026-03-31
-**Status**: Implementation complete through Phase 4
+**Last Updated**: 2026-04-01
+**Status**: Implementation complete through Phase 7

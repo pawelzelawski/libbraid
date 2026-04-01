@@ -26,6 +26,7 @@
 
 #include "../include/braid.h"
 #include "../src/braid_conn.h"
+#include "../src/braid_io.h"
 #include "../src/braid_internal.h"
 #include "../src/braid_pool.h"
 #include "../src/braid_reaper.h"
@@ -1754,6 +1755,106 @@ test_notify_io_modify_failure_discards_connection(void)
 	braid_pool_destroy(pool, 0);
 }
 
+#ifndef __linux__
+/*
+ * kqueue: io_modify must propagate a hard failure from the first EV_DELETE
+ * call (read filter) and stop immediately.
+ */
+static void
+test_kqueue_io_modify_delete_error_propagates(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	int err = 0;
+	int epfd, peer_fd;
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("kq-mod-delerr: kqueue", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("kq-mod-delerr: create", 0);
+		close(epfd);
+		return;
+	}
+
+	conn = alloc_idle_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("kq-mod-delerr: alloc_idle_conn", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+
+	io_kqueue_test_reset_apply_calls();
+	io_kqueue_test_force_error_on_call(1);
+	CHECK_ERR("kq-mod-delerr: io_modify returns SYSCALL",
+		  io_modify(pool, conn->fd, BRAID_IO_READ), BRAID_ERR_SYSCALL);
+	CHECK("kq-mod-delerr: stopped after first apply call",
+	      io_kqueue_test_get_apply_calls() == 1);
+
+	io_kqueue_test_force_error_on_call(0);
+	io_kqueue_test_reset_apply_calls();
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+/*
+ * kqueue: io_unwatch must propagate a hard failure from the first EV_DELETE
+ * call (read filter) and stop immediately.
+ */
+static void
+test_kqueue_io_unwatch_delete_error_propagates(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	int err = 0;
+	int epfd, peer_fd;
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("kq-unwatch-delerr: kqueue", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("kq-unwatch-delerr: create", 0);
+		close(epfd);
+		return;
+	}
+
+	conn = alloc_idle_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("kq-unwatch-delerr: alloc_idle_conn", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+
+	io_kqueue_test_reset_apply_calls();
+	io_kqueue_test_force_error_on_call(1);
+	CHECK_ERR("kq-unwatch-delerr: io_unwatch returns SYSCALL",
+		  io_unwatch(pool, conn->fd), BRAID_ERR_SYSCALL);
+	CHECK("kq-unwatch-delerr: stopped after first apply call",
+	      io_kqueue_test_get_apply_calls() == 1);
+
+	io_kqueue_test_force_error_on_call(0);
+	io_kqueue_test_reset_apply_calls();
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+#endif
+
 /* ── test suite entry point ──────────────────────────────────────────── */
 
 void
@@ -1788,4 +1889,8 @@ run_pool_tests(void)
 	test_init_fn_deadline_exceeded();
 	test_init_fn_elapsed_deadline_enforced();
 	test_notify_io_modify_failure_discards_connection();
+#ifndef __linux__
+	test_kqueue_io_modify_delete_error_propagates();
+	test_kqueue_io_unwatch_delete_error_propagates();
+#endif
 }
