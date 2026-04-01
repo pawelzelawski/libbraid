@@ -7,6 +7,7 @@
 #   make test     — run test suite (dev build)
 #   make test-tsan— run test suite under TSan (Clang only)
 #   make valgrind — run test suite under Valgrind (Linux only)
+#   make bench    — build and run benchmark suite (release flags)
 #   make lint     — clang-tidy + cppcheck
 #   make format   — clang-format -i on all source files
 #   make clean    — remove build artefacts
@@ -89,8 +90,13 @@ TEST_SRCS = tests/run_tests.c		\
 
 BUILD_DIR       = build
 BUILD_TESTS_DIR = $(BUILD_DIR)/tests
+BUILD_BENCH_DIR = $(BUILD_DIR)/bench
 TEST_BIN        = $(BUILD_TESTS_DIR)/run_tests
 TEST_BIN_VG     = $(BUILD_TESTS_DIR)/run_tests_vg
+BENCH_CHECKOUT_BIN = $(BUILD_BENCH_DIR)/bench_checkout
+BENCH_ADVANCE_BIN = $(BUILD_BENCH_DIR)/bench_advance
+BENCH_RECONNECT_BIN = $(BUILD_BENCH_DIR)/bench_reconnect
+BENCH_POOL_SCALE_BIN = $(BUILD_BENCH_DIR)/bench_pool_scale
 LIB_RELEASE     = $(BUILD_DIR)/libbraid.a
 REL_DIR         = $(BUILD_DIR)/rel
 
@@ -98,7 +104,7 @@ INCLUDES = -I include/
 
 # --- Phony targets -----------------------------------------------------------
 
-.PHONY: all dev release test test-tsan valgrind lint format clean install
+.PHONY: all dev release test test-tsan valgrind bench lint format clean install
 
 all: dev
 
@@ -130,6 +136,13 @@ valgrind: $(TEST_BIN_VG)
 	          --track-origins=yes		\
 	          --error-exitcode=1		\
 	          $(TEST_BIN_VG); rc=$$?; rm -f vgcore.*; exit $$rc
+
+# Benchmarks — release flags, built and run separately from tests
+bench: $(BENCH_CHECKOUT_BIN) $(BENCH_ADVANCE_BIN) $(BENCH_RECONNECT_BIN) $(BENCH_POOL_SCALE_BIN)
+	@$(BENCH_CHECKOUT_BIN)
+	@$(BENCH_ADVANCE_BIN)
+	@$(BENCH_RECONNECT_BIN)
+	@$(BENCH_POOL_SCALE_BIN)
 
 # clang-tidy + cppcheck
 lint:
@@ -168,6 +181,32 @@ $(TEST_BIN_VG): $(ALL_LIB_SRCS) $(TEST_SRCS)
 	$(CC) $(CFLAGS_VG) $(INCLUDES) \
 	    -o $(TEST_BIN_VG) \
 	    $(ALL_LIB_SRCS) $(TEST_SRCS)
+
+# --- Benchmarks (release, one-shot binaries) --------------------------------
+
+$(BENCH_CHECKOUT_BIN): $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_checkout.c
+	@mkdir -p $(BUILD_BENCH_DIR)
+	$(CC) $(CFLAGS_RELEASE) $(INCLUDES) \
+	    -o $(BENCH_CHECKOUT_BIN) \
+	    $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_checkout.c
+
+$(BENCH_ADVANCE_BIN): $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_advance.c
+	@mkdir -p $(BUILD_BENCH_DIR)
+	$(CC) $(CFLAGS_RELEASE) $(INCLUDES) \
+	    -o $(BENCH_ADVANCE_BIN) \
+	    $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_advance.c
+
+$(BENCH_RECONNECT_BIN): $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_reconnect.c
+	@mkdir -p $(BUILD_BENCH_DIR)
+	$(CC) $(CFLAGS_RELEASE) $(INCLUDES) \
+	    -o $(BENCH_RECONNECT_BIN) \
+	    $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_reconnect.c
+
+$(BENCH_POOL_SCALE_BIN): $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_pool_scale.c
+	@mkdir -p $(BUILD_BENCH_DIR)
+	$(CC) $(CFLAGS_RELEASE) $(INCLUDES) \
+	    -o $(BENCH_POOL_SCALE_BIN) \
+	    $(ALL_LIB_SRCS) bench/bench_common.c bench/bench_pool_scale.c
 
 # --- Release static library (explicit per-file compile + ar) -----------------
 # Explicit rules — no pattern rules needed, fully BSD make portable.
