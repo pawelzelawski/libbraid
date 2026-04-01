@@ -34,6 +34,7 @@
 
 #include "../include/braid.h"
 #include "../src/braid_internal.h"
+#include "../src/braid_reconnect.h"
 #include "test_harness.h"
 
 typedef struct {
@@ -42,6 +43,15 @@ typedef struct {
 	int err;
 	void *conn_ctx;
 } checkout_rec_t;
+
+typedef struct {
+	braid_event_type_t types[128];
+	int fds[128];
+	int count;
+} event_rec_t;
+
+static uint32_t pool_idle_count(braid_pool_t *pool);
+static void stop_test_server(pid_t pid);
 
 static void
 checkout_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
@@ -52,6 +62,18 @@ checkout_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
 	rec->fd = fd;
 	rec->err = err;
 	rec->conn_ctx = conn_ctx;
+}
+
+static void
+observe_cb(const braid_event_t *ev, void *cb_ctx)
+{
+	event_rec_t *rec = cb_ctx;
+
+	if (rec->count < (int)(sizeof(rec->types) / sizeof(rec->types[0]))) {
+		rec->types[rec->count] = ev->type;
+		rec->fds[rec->count] = ev->fd;
+	}
+	rec->count++;
 }
 
 static int
@@ -77,7 +99,7 @@ read_exact(int fd, void *buf, size_t n)
 }
 
 static int
-start_test_server(pid_t *pid_out, uint16_t *port_out)
+start_test_server_bind(pid_t *pid_out, uint16_t bind_port, uint16_t *port_out)
 {
 	int pipefd[2];
 	pid_t pid;
@@ -115,7 +137,7 @@ start_test_server(pid_t *pid_out, uint16_t *port_out)
 		memset(&addr, 0, sizeof(addr));
 		addr.sin_family = AF_INET;
 		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-		addr.sin_port = htons(0);
+		addr.sin_port = htons(bind_port);
 
 		if (bind(srvfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
 			_exit(12);
@@ -156,6 +178,30 @@ start_test_server(pid_t *pid_out, uint16_t *port_out)
 	close(pipefd[0]);
 
 	*pid_out = pid;
+	return BRAID_OK;
+}
+
+static int
+start_test_server(pid_t *pid_out, uint16_t *port_out)
+{
+	return start_test_server_bind(pid_out, 0, port_out);
+}
+
+static int
+start_test_server_on_port(pid_t *pid_out, uint16_t port)
+{
+	uint16_t actual = 0;
+	int rc;
+
+	rc = start_test_server_bind(pid_out, port, &actual);
+	if (rc != BRAID_OK)
+		return rc;
+	if (actual != port) {
+		stop_test_server(*pid_out);
+		*pid_out = -1;
+		return BRAID_ERR_SYSCALL;
+	}
+
 	return BRAID_OK;
 }
 
@@ -249,6 +295,47 @@ event_loop_step(braid_pool_t *pool, int event_fd)
 	return BRAID_OK;
 }
 
+static int
+run_until_idle_at_least(braid_pool_t *pool, int event_fd, uint32_t want,
+			int max_steps)
+{
+	int i;
+
+	for (i = 0; i < max_steps; i++) {
+		if (pool_idle_count(pool) >= want)
+			return BRAID_OK;
+		if (event_loop_step(pool, event_fd) != BRAID_OK)
+			return BRAID_ERR_SYSCALL;
+	}
+
+	return BRAID_ERR_TIMEOUT;
+}
+
+static int
+event_count_type(event_rec_t *rec, braid_event_type_t type)
+{
+	int i;
+	int n = 0;
+
+	for (i = 0; i < rec->count; i++)
+		if (rec->types[i] == type)
+			n++;
+
+	return n;
+}
+
+static int
+event_first_index_after(event_rec_t *rec, braid_event_type_t type, int after)
+{
+	int i;
+
+	for (i = after + 1; i < rec->count; i++)
+		if (rec->types[i] == type)
+			return i;
+
+	return -1;
+}
+
 static uint32_t
 pool_idle_count(braid_pool_t *pool)
 {
@@ -267,6 +354,10 @@ pool_idle_count(braid_pool_t *pool)
 	return count;
 }
 
+/*
+ * Full connect -> checkout -> checkin -> reuse.
+ * Verifies end-to-end lifecycle and fd reuse on the second checkout.
+ */
 static void
 test_full_connect_checkout_checkin_reuse(void)
 {
@@ -356,6 +447,547 @@ cleanup:
 	stop_test_server(server_pid);
 }
 
+/*
+ * Pool exhaustion event is emitted when max_connections is reached and a
+ * zero-timeout checkout request cannot be served.
+ */
+static void
+test_pool_exhausted_event_fires(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	checkout_rec_t active;
+	event_rec_t events;
+	int err = 0;
+
+	memset(&active, 0, sizeof(active));
+	memset(&events, 0, sizeof(events));
+
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-exhausted: start server", 0);
+		return;
+	}
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-exhausted: event fd", 0);
+		stop_test_server(server_pid);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 1;
+	cfg.max_connections = 1;
+	cfg.observe_fn = observe_cb;
+	cfg.hook_context = &events;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-exhausted: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	CHECK_ERR("integration-exhausted: warm pool",
+		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
+	events.count = 0;
+
+	CHECK_ERR("integration-exhausted: first checkout",
+		  braid_pool_checkout(pool, 0, checkout_cb, &active, NULL),
+		  BRAID_OK);
+	CHECK("integration-exhausted: first callback fired", active.calls == 1);
+
+	CHECK_ERR("integration-exhausted: zero-timeout checkout exhausted",
+		  braid_pool_checkout(pool, 0, checkout_cb, &active, NULL),
+		  BRAID_ERR_EXHAUSTED);
+	CHECK("integration-exhausted: POOL_EXHAUSTED event fired",
+	      event_count_type(&events, BRAID_EV_POOL_EXHAUSTED) >= 1);
+
+	CHECK_ERR("integration-exhausted: checkin active",
+		  braid_pool_checkin(pool, active.fd, BRAID_CONN_OK), BRAID_OK);
+
+cleanup:
+	if (pool != NULL)
+		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * With max_connections=1, a second checkout waits and is served when the
+ * first active connection is checked in.
+ */
+static void
+test_single_connection_concurrent_checkouts(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	checkout_rec_t c1;
+	checkout_rec_t c2;
+	int err = 0;
+	int i;
+
+	memset(&c1, 0, sizeof(c1));
+	memset(&c2, 0, sizeof(c2));
+
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-concurrent1: start server", 0);
+		return;
+	}
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-concurrent1: event fd", 0);
+		stop_test_server(server_pid);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 1;
+	cfg.max_connections = 1;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-concurrent1: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	CHECK_ERR("integration-concurrent1: warm pool",
+		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
+
+	CHECK_ERR("integration-concurrent1: checkout first",
+		  braid_pool_checkout(pool, 1000, checkout_cb, &c1, NULL),
+		  BRAID_OK);
+	CHECK("integration-concurrent1: first callback fired", c1.calls == 1);
+	CHECK("integration-concurrent1: first checkout success",
+	      c1.err == BRAID_OK);
+
+	CHECK_ERR("integration-concurrent1: checkout second enqueued",
+		  braid_pool_checkout(pool, 1000, checkout_cb, &c2, NULL),
+		  BRAID_OK);
+	CHECK("integration-concurrent1: second callback not yet fired",
+	      c2.calls == 0);
+
+	CHECK_ERR("integration-concurrent1: checkin first",
+		  braid_pool_checkin(pool, c1.fd, BRAID_CONN_OK), BRAID_OK);
+
+	for (i = 0; i < 200 && c2.calls == 0; i++)
+		event_loop_step(pool, event_fd);
+
+	CHECK("integration-concurrent1: second callback fired", c2.calls == 1);
+	CHECK("integration-concurrent1: second checkout success",
+	      c2.err == BRAID_OK);
+	CHECK("integration-concurrent1: same fd served", c2.fd == c1.fd);
+
+	CHECK_ERR("integration-concurrent1: checkin second",
+		  braid_pool_checkin(pool, c2.fd, BRAID_CONN_OK), BRAID_OK);
+
+cleanup:
+	if (pool != NULL)
+		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * Observe callback receives CONN_CREATED, then CONN_DESTROYED on discard,
+ * then RECONNECT_ATTEMPT after replacement scheduling.
+ */
+static void
+test_observe_event_sequence(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	checkout_rec_t c;
+	event_rec_t events;
+	int err = 0;
+	int i;
+	int idx_created;
+	int idx_destroyed;
+	int idx_reconnect;
+
+	memset(&c, 0, sizeof(c));
+	memset(&events, 0, sizeof(events));
+
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-observe: start server", 0);
+		return;
+	}
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-observe: event fd", 0);
+		stop_test_server(server_pid);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 1;
+	cfg.max_connections = 1;
+	cfg.observe_fn = observe_cb;
+	cfg.hook_context = &events;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-observe: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	CHECK_ERR("integration-observe: warm pool",
+		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
+	events.count = 0;
+
+	CHECK_ERR("integration-observe: checkout",
+		  braid_pool_checkout(pool, 0, checkout_cb, &c, NULL),
+		  BRAID_OK);
+	CHECK_ERR("integration-observe: discard checkin",
+		  braid_pool_checkin(pool, c.fd, BRAID_CONN_DISCARD), BRAID_OK);
+
+	for (i = 0; i < 400; i++) {
+		if (event_count_type(&events, BRAID_EV_RECONNECT_ATTEMPT) > 0)
+			break;
+		event_loop_step(pool, event_fd);
+	}
+
+	idx_created =
+	    event_first_index_after(&events, BRAID_EV_CONN_CREATED, -1);
+	idx_destroyed = event_first_index_after(
+	    &events, BRAID_EV_CONN_DESTROYED, idx_created);
+	idx_reconnect = event_first_index_after(
+	    &events, BRAID_EV_RECONNECT_ATTEMPT, idx_destroyed);
+
+	CHECK("integration-observe: CONN_CREATED observed", idx_created >= 0);
+	CHECK("integration-observe: CONN_DESTROYED after CREATED",
+	      idx_destroyed > idx_created);
+	CHECK("integration-observe: RECONNECT_ATTEMPT after DESTROYED",
+	      idx_reconnect > idx_destroyed);
+
+cleanup:
+	if (pool != NULL)
+		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * When peer closes while connection is IDLE, pool detects EOF via MSG_PEEK,
+ * transitions the connection to DEAD, and schedules reconnect work.
+ */
+static void
+test_half_open_idle_peer_close_detected(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	int err = 0;
+	int i;
+	int saw_drop = 0;
+	uint32_t initial_live;
+
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-halfopen-idle: start server", 0);
+		return;
+	}
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-halfopen-idle: event fd", 0);
+		stop_test_server(server_pid);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 1;
+	cfg.max_connections = 1;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-halfopen-idle: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	CHECK_ERR("integration-halfopen-idle: warm pool",
+		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
+	initial_live = pool->live_count;
+
+	stop_test_server(server_pid);
+	server_pid = -1;
+
+	for (i = 0; i < 400; i++) {
+		event_loop_step(pool, event_fd);
+		if (pool->live_count < initial_live)
+			saw_drop = 1;
+		if (saw_drop && pool_idle_count(pool) == 0)
+			break;
+	}
+
+	CHECK("integration-halfopen-idle: observed connection teardown",
+	      saw_drop == 1);
+	CHECK("integration-halfopen-idle: no healthy idle connection remains",
+	      pool_idle_count(pool) == 0);
+
+cleanup:
+	if (pool != NULL)
+		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * Half-open while ACTIVE is reported by caller with BRAID_CONN_DISCARD.
+ * Pool must destroy the active connection and replenish to min_connections.
+ */
+static void
+test_half_open_active_discard_replaced(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	checkout_rec_t c;
+	event_rec_t events;
+	int err = 0;
+
+	memset(&c, 0, sizeof(c));
+	memset(&events, 0, sizeof(events));
+
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-halfopen-active: start server", 0);
+		return;
+	}
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-halfopen-active: event fd", 0);
+		stop_test_server(server_pid);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 1;
+	cfg.max_connections = 1;
+	cfg.observe_fn = observe_cb;
+	cfg.hook_context = &events;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-halfopen-active: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	CHECK_ERR("integration-halfopen-active: warm pool",
+		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
+
+	events.count = 0;
+	CHECK_ERR("integration-halfopen-active: checkout",
+		  braid_pool_checkout(pool, 0, checkout_cb, &c, NULL),
+		  BRAID_OK);
+	CHECK("integration-halfopen-active: checkout succeeded",
+	      c.calls == 1 && c.err == BRAID_OK);
+
+	CHECK_ERR("integration-halfopen-active: discard checkin",
+		  braid_pool_checkin(pool, c.fd, BRAID_CONN_DISCARD), BRAID_OK);
+	CHECK_ERR("integration-halfopen-active: replacement reaches idle",
+		  run_until_idle_at_least(pool, event_fd, 1, 700), BRAID_OK);
+	CHECK("integration-halfopen-active: destroy event observed",
+	      event_count_type(&events, BRAID_EV_CONN_DESTROYED) >= 1);
+
+cleanup:
+	if (pool != NULL)
+		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * Reconnection after server restart: after a forced discard while the server
+ * is down, restarting the server on the same port should let the pool recover.
+ */
+static void
+test_reconnect_after_server_restart(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	checkout_rec_t c1;
+	checkout_rec_t c2;
+	int err = 0;
+	int i;
+
+	memset(&c1, 0, sizeof(c1));
+	memset(&c2, 0, sizeof(c2));
+
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-restart: start server", 0);
+		return;
+	}
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-restart: event fd", 0);
+		stop_test_server(server_pid);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 1;
+	cfg.max_connections = 1;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-restart: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	CHECK_ERR("integration-restart: warm pool",
+		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
+	CHECK_ERR("integration-restart: checkout before stop",
+		  braid_pool_checkout(pool, 0, checkout_cb, &c1, NULL),
+		  BRAID_OK);
+	CHECK("integration-restart: first checkout succeeded",
+	      c1.calls == 1 && c1.err == BRAID_OK);
+
+	stop_test_server(server_pid);
+	server_pid = -1;
+
+	CHECK_ERR("integration-restart: discard while server down",
+		  braid_pool_checkin(pool, c1.fd, BRAID_CONN_DISCARD),
+		  BRAID_OK);
+
+	for (i = 0; i < 200; i++)
+		event_loop_step(pool, event_fd);
+	CHECK("integration-restart: no idle while server down",
+	      pool_idle_count(pool) == 0);
+
+	CHECK_ERR("integration-restart: restart same port",
+		  start_test_server_on_port(&server_pid, port), BRAID_OK);
+	CHECK_ERR("integration-restart: pool recovers after restart",
+		  run_until_idle_at_least(pool, event_fd, 1, 1000), BRAID_OK);
+
+	CHECK_ERR("integration-restart: checkout after restart",
+		  braid_pool_checkout(pool, 0, checkout_cb, &c2, NULL),
+		  BRAID_OK);
+	CHECK("integration-restart: second checkout succeeded",
+	      c2.calls == 1 && c2.err == BRAID_OK);
+	CHECK_ERR("integration-restart: checkin after restart",
+		  braid_pool_checkin(pool, c2.fd, BRAID_CONN_OK), BRAID_OK);
+
+cleanup:
+	if (pool != NULL)
+		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * Destroy while reconnect entries are pending must return cleanly and
+ * clear internal reconnect state without attempting post-destroy connects.
+ */
+static void
+test_destroy_during_pending_reconnect(void)
+{
+	int event_fd = -1;
+	braid_pool_t *pool = NULL;
+	braid_config_t cfg;
+	braid_reconnect_entry_t entry;
+	int err = 0;
+
+	event_fd = make_event_fd();
+	if (event_fd < 0) {
+		CHECK("integration-destroy-reconnect: event fd", 0);
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.host = "127.0.0.1";
+	cfg.port = 65535;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 0;
+	cfg.max_connections = 1;
+
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-destroy-reconnect: create pool", pool != NULL);
+	if (pool == NULL) {
+		close(event_fd);
+		return;
+	}
+
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+
+	memset(&entry, 0, sizeof(entry));
+	entry.next_retry_ms = UINT64_MAX;
+	entry.attempt = 7;
+	CHECK_ERR("integration-destroy-reconnect: push pending reconnect",
+		  reconnect_heap_push(&pool->reconnect, entry), BRAID_OK);
+
+	CHECK("integration-destroy-reconnect: reconnect queue non-empty",
+	      pool->reconnect.count > 0);
+
+	braid_pool_destroy(pool, 0);
+	pool = NULL;
+	close(event_fd);
+}
+/*
+ * Warm pool reaches min_connections without any checkout calls.
+ * Then verifies two immediate checkouts succeed from the warmed pool.
+ */
 static void
 test_warm_pool_reaches_min_connections(void)
 {
@@ -438,9 +1070,19 @@ cleanup:
 	stop_test_server(server_pid);
 }
 
+/*
+ * Integration suite entry point.
+ */
 void
 run_integration_tests(void)
 {
 	test_full_connect_checkout_checkin_reuse();
 	test_warm_pool_reaches_min_connections();
+	test_pool_exhausted_event_fires();
+	test_single_connection_concurrent_checkouts();
+	test_observe_event_sequence();
+	test_half_open_idle_peer_close_detected();
+	test_half_open_active_discard_replaced();
+	test_reconnect_after_server_restart();
+	test_destroy_during_pending_reconnect();
 }
