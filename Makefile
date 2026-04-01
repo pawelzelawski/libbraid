@@ -27,9 +27,16 @@ CFLAGS_COMMON = -std=c11 -Wall -Wextra -Wpedantic			\
                 -D_POSIX_C_SOURCE=200809L				\
                 -D_XOPEN_SOURCE=700
 
+# ASan/UBSan — Linux only; OpenBSD clang does not support -fsanitize=address
+ifeq ($(OS),Linux)
+    SANITIZERS = -fsanitize=address,undefined
+else
+    SANITIZERS =
+endif
+
 CFLAGS_DEV    = $(CFLAGS_COMMON)					\
                 -O0 -g3 -gdwarf-4 -Werror				\
-                -fsanitize=address,undefined				\
+                $(SANITIZERS)						\
                 -fno-omit-frame-pointer				\
                 -DBRAID_DEBUG -DBRAID_TEST_CLOCK
 
