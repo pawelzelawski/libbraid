@@ -299,9 +299,9 @@ conn_alloc(braid_pool_t *pool, int fd, braid_conn_t **conn)
  * and probe-count values. Uses config fields when non-zero; otherwise
  * applies the documented defaults above.
  *
- * TCP_KEEPIDLE is Linux-specific; OpenBSD uses TCP_KEEPALIVE for the
- * same semantics. The #ifdef is the only platform conditional permitted
- * outside the I/O abstraction layer. See ARCHITECTURE.md §5.
+ * Per-socket tuning constants are guarded by #ifdef — absent on some
+ * platforms or suppressed by strict POSIX feature-test macros. SO_KEEPALIVE
+ * is always set. See ARCHITECTURE.md §5.
  */
 int
 conn_keepalive_configure(int fd, const braid_config_t *config)
@@ -317,21 +317,22 @@ conn_keepalive_configure(int fd, const braid_config_t *config)
 	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) == -1)
 		return BRAID_ERR_SYSCALL;
 
-#ifdef __linux__
+#ifdef TCP_KEEPIDLE
 	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) ==
-	    -1)
-		return BRAID_ERR_SYSCALL;
-#else
-	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle)) ==
 	    -1)
 		return BRAID_ERR_SYSCALL;
 #endif
 
+#ifdef TCP_KEEPINTVL
 	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)) ==
 	    -1)
 		return BRAID_ERR_SYSCALL;
+#endif
+
+#ifdef TCP_KEEPCNT
 	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt)) == -1)
 		return BRAID_ERR_SYSCALL;
+#endif
 
 	return BRAID_OK;
 }
