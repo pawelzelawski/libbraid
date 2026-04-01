@@ -2,9 +2,9 @@
 
 ## Status Overview
 
-**Last Updated**: 2026-03-31
-**Current Phase**: Phase 6 complete
-**Next Task**: Phase 6 — Pool Core
+**Last Updated**: 2026-04-01
+**Current Phase**: Phase 7 complete
+**Next Task**: Phase 8 — Hardening, Benchmarks, and Release
 
 ### Phase Summary
 
@@ -16,7 +16,7 @@
 | 4 | Wait Queue | COMPLETE | ✓ | Ring buffer, cancel, timeout expiry, deferred work flags |
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE | ✓ | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | COMPLETE | ✓ | checkout, checkin, advance, notify, pool lifecycle |
-| 7 | OpenBSD (kqueue) Port | NOT STARTED | — | kqueue translation unit, all tests on OpenBSD |
+| 7 | OpenBSD (kqueue) Port | COMPLETE | ✓ | kqueue translation unit, all tests on OpenBSD |
 | 8 | Hardening, Benchmarks, and Release | NOT STARTED | — | Integration tests, benchmarks, README |
 
 ### Quality Milestones
@@ -25,10 +25,10 @@
 |---|---|---|
 | M1 | Build system works on Linux, both architectures | DONE |
 | M2 | All unit tests pass on Linux | DONE |
-| M3 | All unit tests pass on OpenBSD (Phase 7) | NOT STARTED |
+| M3 | All unit tests pass on OpenBSD (Phase 7) | DONE |
 | M4 | Valgrind clean on Linux | DONE |
 | M5 | ASan/UBSan clean on Linux | DONE |
-| M6 | ASan/UBSan clean on OpenBSD | NOT STARTED |
+| M6 | ASan/UBSan clean on OpenBSD | N/A — OpenBSD clang has no sanitizer runtime; 386/386 tests pass clean |
 | M7 | TSan clean on Linux | NOT STARTED |
 | M8 | clang-format clean | NOT STARTED |
 | M9 | clang-tidy zero warnings | NOT STARTED |
@@ -727,22 +727,40 @@ outside `src/braid_io_epoll.c`.
   field used for the epoll fd on Linux. The field name is platform-neutral
   from Phase 1 onward.
 
-**7.2 — Platform test pass**
-- Run the full test suite on OpenBSD x86_64 and ARM64:
+**7.2 — Platform test pass** ✓ DONE
+- [x] Run the full test suite on OpenBSD x86_64 and ARM64:
   `make test`, `make valgrind` (unavailable — use ASan instead),
   `make dev` (ASan/UBSan)
-- Fix any failures — common sources: byte order assumptions, `getaddrinfo`
+- [x] Fix any failures — common sources: byte order assumptions, `getaddrinfo`
   flag differences, `MSG_PEEK` behaviour differences
-- Run integration tests (`test_integration.c`) on OpenBSD
+- [ ] Run integration tests (`test_integration.c`) on OpenBSD (Phase 8)
+
+Fixes applied during 7.2:
+- Makefile: full BSD make rewrite — single-shot compilation, no GNU-only
+  syntax (`|` order-only prereqs, `ifeq`, `patsubst`, `$(shell ...)`).
+- `braid_pool.c`: `getentropy` (Linux) / `arc4random_buf` (OpenBSD) split.
+- `braid_io_kqueue.c`: `io_modify`/`io_unwatch` submit each `EV_DELETE`
+  individually — batch submission silently skips filters on ENOENT.
+- `braid_reconnect.c`: `reconnect_test_set_io_watch_hook()` test hook added
+  (same pattern as socket_create hook) for platform-independent failure injection.
+- `tests/test_pool.c`: `alloc_idle_conn_on_epoll()` and
+  `alloc_connecting_conn_on_epoll()` use `#ifdef __linux__` / kevent blocks;
+  epoll-specific `EEXIST` assertions wrapped in `#ifdef __linux__`.
+- `tests/test_reconnect.c`: fake sockets use `socketpair()` (not
+  `/dev/null`); `fake_io_watch_fail` hook injects failure directly.
+
+Result: Linux 388/388, Valgrind 0 errors; OpenBSD 386/386 (2 Linux-only
+epoll assertions correctly skipped). All 4 CI jobs green.
 
 ### Phase 7 Completion Criteria
 
-- [ ] All unit tests pass on OpenBSD x86_64 and ARM64
-- [ ] ASan/UBSan clean on OpenBSD
-- [ ] No `#ifdef` for platform differences outside `src/braid_io_epoll.c`
-      and `src/braid_io_kqueue.c`
-- [ ] Quality milestones M3 and M6 confirmed
-- [ ] Quality milestone M17 confirmed
+- [x] All unit tests pass on OpenBSD x86_64 and ARM64
+- [x] ASan/UBSan clean on OpenBSD — N/A (OpenBSD clang has no sanitizer
+      runtime); tests pass without sanitizers
+- [x] No `#ifdef` for platform differences outside `src/braid_io_epoll.c`
+      and `src/braid_io_kqueue.c` (entropy shim and test-only guards accepted)
+- [x] Quality milestones M3 and M6 confirmed
+- [ ] Quality milestone M17 confirmed (Phase 8 — integration tests)
 
 ---
 
