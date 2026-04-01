@@ -47,8 +47,10 @@ jobs:
         uses: vmactions/openbsd-vm@v1.3.8
         with:
           usesh: true
+          prepare: |
+            pkg_add -I gmake
           run: |
-            make dev
+            gmake dev
 
   build-and-test-openbsd-arm64:
     name: OpenBSD arm64
@@ -62,5 +64,7 @@ jobs:
         with:
           usesh: true
           arch: aarch64
+          prepare: |
+            pkg_add -I gmake
           run: |
-            make dev
+            gmake dev
