@@ -72,8 +72,8 @@ reaper_sift_down(braid_idle_heap_t *heap, uint32_t i)
 	uint32_t left, right, smallest;
 
 	for (;;) {
-		left = 2 * i + 1;
-		right = 2 * i + 2;
+		left = (2 * i) + 1;
+		right = (2 * i) + 2;
 		smallest = i;
 
 		if (left < heap->count &&

@@ -50,26 +50,25 @@ static int pool_serve_waiter(braid_pool_t *pool);
 void
 pool_drain_deferred(braid_pool_t *pool)
 {
-        uint32_t i;
+	uint32_t i;
 
-        if (pool->deferred_work & BRAID_DEFERRED_PROCESS_DEAD) {
-                pool->deferred_work &= ~BRAID_DEFERRED_PROCESS_DEAD;
-                for (i = 0; i < pool->table_size; i++) {
-                        braid_conn_t *conn = &pool->table[i];
+	if (pool->deferred_work & BRAID_DEFERRED_PROCESS_DEAD) {
+		pool->deferred_work &= ~BRAID_DEFERRED_PROCESS_DEAD;
+		for (i = 0; i < pool->table_size; i++) {
+			braid_conn_t *conn = &pool->table[i];
 
-                        if (conn->fd == -1 ||
-                            (conn->flags & CONN_FLAG_TOMBSTONE))
-                                continue;
-                        if (conn->flags & CONN_FLAG_CLOSING_DEFERRED)
-                                conn_transition(pool, conn,
-                                                BRAID_STATE_DEAD);
-                }
-        }
+			if (conn->fd == -1 ||
+			    (conn->flags & CONN_FLAG_TOMBSTONE))
+				continue;
+			if (conn->flags & CONN_FLAG_CLOSING_DEFERRED)
+				conn_transition(pool, conn, BRAID_STATE_DEAD);
+		}
+	}
 
-        if (pool->deferred_work & BRAID_DEFERRED_SERVE_WAITQUEUE) {
-                pool->deferred_work &= ~BRAID_DEFERRED_SERVE_WAITQUEUE;
-                pool_serve_waiter(pool);
-        }
+	if (pool->deferred_work & BRAID_DEFERRED_SERVE_WAITQUEUE) {
+		pool->deferred_work &= ~BRAID_DEFERRED_SERVE_WAITQUEUE;
+		pool_serve_waiter(pool);
+	}
 }
 
 /* ── pool_fire_event ────────────────────────────────────────────────── */
@@ -330,7 +329,7 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 
 		deadline_ms = braid_now_ms() + drain_timeout_ms;
 		ts.tv_sec = 0;
-		ts.tv_nsec = 10 * 1000 * 1000; /* 10 ms */
+		ts.tv_nsec = 10L * 1000 * 1000; /* 10 ms */
 		while (pool_active_count(pool) > 0) {
 			if (braid_now_ms() >= deadline_ms)
 				break;
@@ -639,111 +638,112 @@ braid_pool_cancel(braid_pool_t *pool, braid_token_t token)
 int
 braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 {
-        uint64_t now_ms;
-        uint64_t earliest_ms;
-        uint32_t i;
+	uint64_t now_ms;
+	uint64_t earliest_ms;
+	uint32_t i;
 
-        now_ms = braid_now_ms();
-        earliest_ms = UINT64_MAX;
+	now_ms = braid_now_ms();
+	earliest_ms = UINT64_MAX;
 
-        /* Step 2: process reconnection heap. */
-        reconnect_advance(pool, now_ms);
-        {
-                braid_reconnect_entry_t entry;
+	/* Step 2: process reconnection heap. */
+	reconnect_advance(pool, now_ms);
+	{
+		braid_reconnect_entry_t entry;
 
-                if (reconnect_heap_peek(&pool->reconnect, &entry) == BRAID_OK)
-                        if (entry.next_retry_ms < earliest_ms)
-                                earliest_ms = entry.next_retry_ms;
-        }
+		if (reconnect_heap_peek(&pool->reconnect, &entry) == BRAID_OK)
+			if (entry.next_retry_ms < earliest_ms)
+				earliest_ms = entry.next_retry_ms;
+	}
 
-        /*
-         * Step 2a: abort CONNECTING sockets that have exceeded
-         * connect_timeout.  conn_transition(DEAD) handles io_unwatch,
-         * close, live_count decrement, and reconnect entry insertion.
-         * Track the soonest future deadline for next_ms.
-         */
-        for (i = 0; i < pool->table_size; i++) {
-                braid_conn_t *conn = &pool->table[i];
-                uint64_t deadline_ms;
+	/*
+	 * Step 2a: abort CONNECTING sockets that have exceeded
+	 * connect_timeout.  conn_transition(DEAD) handles io_unwatch,
+	 * close, live_count decrement, and reconnect entry insertion.
+	 * Track the soonest future deadline for next_ms.
+	 */
+	for (i = 0; i < pool->table_size; i++) {
+		braid_conn_t *conn = &pool->table[i];
+		uint64_t deadline_ms;
 
-                if (conn->fd == -1 || (conn->flags & CONN_FLAG_TOMBSTONE))
-                        continue;
-                if (conn->state != BRAID_STATE_CONNECTING)
-                        continue;
+		if (conn->fd == -1 || (conn->flags & CONN_FLAG_TOMBSTONE))
+			continue;
+		if (conn->state != BRAID_STATE_CONNECTING)
+			continue;
 
-                deadline_ms = conn->created_at_ms +
-                              (uint64_t)pool->config.connect_timeout;
-                if (now_ms > deadline_ms) {
-                        conn_transition(pool, conn, BRAID_STATE_DEAD);
-                } else {
-                        if (deadline_ms < earliest_ms)
-                                earliest_ms = deadline_ms;
-                }
-        }
+		deadline_ms = conn->created_at_ms +
+			      (uint64_t)pool->config.connect_timeout;
+		if (now_ms > deadline_ms) {
+			conn_transition(pool, conn, BRAID_STATE_DEAD);
+		} else {
+			if (deadline_ms < earliest_ms)
+				earliest_ms = deadline_ms;
+		}
+	}
 
-        /* Step 3: process idle reaper heap. */
-        reaper_advance(pool, now_ms);
-        {
-                braid_idle_entry_t entry;
-                uint64_t timeout_ms;
+	/* Step 3: process idle reaper heap. */
+	reaper_advance(pool, now_ms);
+	{
+		braid_idle_entry_t entry;
+		uint64_t timeout_ms;
 
-                timeout_ms = pool->config.idle_reap_timeout != 0
-                                 ? (uint64_t)pool->config.idle_reap_timeout
-                                 : 300000;
+		timeout_ms = pool->config.idle_reap_timeout != 0
+				 ? (uint64_t)pool->config.idle_reap_timeout
+				 : 300000;
 
-                if (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
-                        uint64_t fire_ms = entry.last_active_ms + timeout_ms;
+		if (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
+			uint64_t fire_ms = entry.last_active_ms + timeout_ms;
 
-                        if (fire_ms < earliest_ms)
-                                earliest_ms = fire_ms;
-                }
-        }
+			if (fire_ms < earliest_ms)
+				earliest_ms = fire_ms;
+		}
+	}
 
-        /* Step 4: expire wait queue entries. */
-        waitq_expire(&pool->waitq, now_ms);
-        {
-                /*
-                 * Walk the occupied ring span to find the soonest
-                 * non-tombstone entry with a deadline.  The ring is FIFO
-                 * so the first live entry with a deadline is the soonest.
-                 */
-                uint32_t span = pool->waitq.tail - pool->waitq.head;
-                uint32_t j;
+	/* Step 4: expire wait queue entries. */
+	waitq_expire(&pool->waitq, now_ms);
+	{
+		/*
+		 * Walk the occupied ring span to find the soonest
+		 * non-tombstone entry with a deadline.  The ring is FIFO
+		 * so the first live entry with a deadline is the soonest.
+		 */
+		uint32_t span = pool->waitq.tail - pool->waitq.head;
+		uint32_t j;
 
-                for (j = 0; j < span; j++) {
-                        braid_waiter_t *slot = &pool->waitq.slots[
-                            (pool->waitq.head + j) % pool->waitq.cap];
+		for (j = 0; j < span; j++) {
+			braid_waiter_t *slot =
+			    &pool->waitq.slots[(pool->waitq.head + j) %
+					       pool->waitq.cap];
 
-                        if (slot->flags & WAITER_FLAG_TOMBSTONE)
-                                continue;
-                        if (slot->deadline_ms == 0)
-                                continue; /* no timeout */
-                        if (slot->deadline_ms < earliest_ms)
-                                earliest_ms = slot->deadline_ms;
-                        break; /* FIFO: first live entry is soonest */
-                }
-        }
+			if (slot->flags & WAITER_FLAG_TOMBSTONE)
+				continue;
+			if (slot->deadline_ms == 0)
+				continue; /* no timeout */
+			if (slot->deadline_ms < earliest_ms)
+				earliest_ms = slot->deadline_ms;
+			break; /* FIFO: first live entry is soonest */
+		}
+	}
 
-        /* Step 5: drain any work deferred from callbacks above. */
-        if (pool->in_callback == 0 && pool->deferred_work != 0)
-                pool_drain_deferred(pool);
+	/* Step 5: drain any work deferred from callbacks above. */
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
 
-        /* Step 6: compute relative next_ms for epoll_wait timeout. */
-        if (next_ms != NULL) {
-                if (earliest_ms == UINT64_MAX) {
-                        *next_ms = UINT32_MAX;
-                } else if (earliest_ms <= now_ms) {
-                        *next_ms = 0;
-                } else {
-                        uint64_t delta = earliest_ms - now_ms;
+	/* Step 6: compute relative next_ms for epoll_wait timeout. */
+	if (next_ms != NULL) {
+		if (earliest_ms == UINT64_MAX) {
+			*next_ms = UINT32_MAX;
+		} else if (earliest_ms <= now_ms) {
+			*next_ms = 0;
+		} else {
+			uint64_t delta = earliest_ms - now_ms;
 
-                        *next_ms = delta > (uint64_t)UINT32_MAX
-                                       ? UINT32_MAX
-                                       : (uint32_t)delta;
-                }
-        }
+			*next_ms = delta > (uint64_t)UINT32_MAX
+				       ? UINT32_MAX
+				       : (uint32_t)delta;
+		}
+	}
 
-        return BRAID_OK;
+	return BRAID_OK;
 }
 
 /* -- braid_pool_notify --------------------------------------------------- */
@@ -771,79 +771,76 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 int
 braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 {
-        braid_conn_t *conn;
+	braid_conn_t *conn;
 
-        (void)events; /* dispatch by state, not event bits */
+	(void)events; /* dispatch by state, not event bits */
 
-        if (table_lookup(pool, fd, &conn) != BRAID_OK)
-                return BRAID_OK;
+	if (table_lookup(pool, fd, &conn) != BRAID_OK)
+		return BRAID_OK;
 
-        switch (conn->state) {
-        case BRAID_STATE_CONNECTING: {
-                int so_error = 0;
-                socklen_t errlen = sizeof(so_error);
+	switch (conn->state) {
+	case BRAID_STATE_CONNECTING: {
+		int so_error = 0;
+		socklen_t errlen = sizeof(so_error);
 
-                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error,
-                               &errlen) != 0 ||
-                    so_error != 0) {
-                        conn_transition(pool, conn, BRAID_STATE_DEAD);
-                        break;
-                }
+		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &errlen) !=
+			0 ||
+		    so_error != 0) {
+			conn_transition(pool, conn, BRAID_STATE_DEAD);
+			break;
+		}
 
-                conn_transition(pool, conn, BRAID_STATE_INITIALIZING);
+		conn_transition(pool, conn, BRAID_STATE_INITIALIZING);
 
-                if (pool->config.init_fn != NULL) {
-                        uint64_t timeout_ms;
-                        uint64_t deadline_ms;
-                        int init_rc;
+		if (pool->config.init_fn != NULL) {
+			uint64_t timeout_ms;
+			uint64_t deadline_ms;
+			int init_rc;
 
-                        timeout_ms = pool->config.init_timeout != 0
-                                         ? (uint64_t)pool->config.init_timeout
-                                         : 10000;
-                        deadline_ms = braid_now_ms() + timeout_ms;
-                        pool->in_callback++;
-                        init_rc = pool->config.init_fn(
-                            fd, &conn->conn_ctx,
-                            pool->config.hook_context, deadline_ms);
-                        pool->in_callback--;
-                        if (pool->in_callback == 0 &&
-                            pool->deferred_work != 0)
-                                pool_drain_deferred(pool);
+			timeout_ms = pool->config.init_timeout != 0
+					 ? (uint64_t)pool->config.init_timeout
+					 : 10000;
+			deadline_ms = braid_now_ms() + timeout_ms;
+			pool->in_callback++;
+			init_rc = pool->config.init_fn(
+			    fd, &conn->conn_ctx, pool->config.hook_context,
+			    deadline_ms);
+			pool->in_callback--;
+			if (pool->in_callback == 0 && pool->deferred_work != 0)
+				pool_drain_deferred(pool);
 
-                        if (init_rc != BRAID_OK) {
-                                conn_transition(pool, conn,
-                                                BRAID_STATE_DEAD);
-                                break;
-                        }
-                }
+			if (init_rc != BRAID_OK) {
+				conn_transition(pool, conn, BRAID_STATE_DEAD);
+				break;
+			}
+		}
 
-                conn_transition(pool, conn, BRAID_STATE_IDLE);
-                io_modify(pool, fd, BRAID_IO_READ);
-                break;
-        }
+		conn_transition(pool, conn, BRAID_STATE_IDLE);
+		io_modify(pool, fd, BRAID_IO_READ);
+		break;
+	}
 
-        case BRAID_STATE_IDLE: {
-                char probe;
-                ssize_t n;
+	case BRAID_STATE_IDLE: {
+		char probe;
+		ssize_t n;
 
-                n = recv(fd, &probe, 1, MSG_PEEK);
-                if (n == -1 &&
-                    (errno == EAGAIN || errno == EWOULDBLOCK))
-                        break; /* spurious wakeup */
+		n = recv(fd, &probe, 1, MSG_PEEK);
+		if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			break; /* spurious wakeup */
 
-                /* EOF (0), data (1), or error (-1 with other errno):
-                 * connection is no longer clean.  CLOSING chains to DEAD
-                 * via conn_transition when in_callback == 0. */
-                conn_transition(pool, conn, BRAID_STATE_CLOSING);
-                break;
-        }
+		/* EOF (0), data (1), or error (-1 with other errno):
+		 * connection is no longer clean.  CLOSING chains to DEAD
+		 * via conn_transition when in_callback == 0. */
+		conn_transition(pool, conn, BRAID_STATE_CLOSING);
+		break;
+	}
 
-        case BRAID_STATE_ACTIVE:
-        case BRAID_STATE_INITIALIZING:
-        case BRAID_STATE_CLOSING:
-        case BRAID_STATE_DEAD:
-                break;
-        }
+	case BRAID_STATE_ACTIVE:
+	case BRAID_STATE_INITIALIZING:
+	case BRAID_STATE_CLOSING:
+	case BRAID_STATE_DEAD:
+		break;
+	}
 
-        return BRAID_OK;
+	return BRAID_OK;
 }

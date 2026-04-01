@@ -694,7 +694,7 @@ tests pass.
 - [x] connect_timeout verified: CONNECTING socket aborted after deadline
 - [x] Shutdown suppresses reconnect: no reconnect entries inserted after
       pool marked shutting down
-- [ ] `make lint` zero warnings
+- [x] `make lint` zero warnings
 - [x] All default config values applied correctly when fields are zero
 - [x] Quality milestone M15 confirmed
 
