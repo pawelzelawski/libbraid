@@ -22,7 +22,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/event.h>
-#include <sys/sysctl.h>
 #endif
 
 #include "../src/braid_internal.h"
@@ -47,6 +46,31 @@ bench_now_ns(void)
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
+
+#ifndef __linux__
+static int
+bench_read_first_line(const char *cmd, char *buf, size_t buflen)
+{
+	FILE *f;
+
+	if (buflen == 0)
+		return BRAID_ERR_INVAL;
+
+	buf[0] = '\0';
+	f = popen(cmd, "r");
+	if (f == NULL)
+		return BRAID_ERR_SYSCALL;
+
+	if (fgets(buf, (int)buflen, f) == NULL) {
+		(void)pclose(f);
+		return BRAID_ERR_SYSCALL;
+	}
+
+	(void)pclose(f);
+	buf[strcspn(buf, "\r\n")] = '\0';
+	return (buf[0] == '\0') ? BRAID_ERR_SYSCALL : BRAID_OK;
+}
+#endif
 
 int
 bench_make_event_fd(void)
@@ -330,22 +354,25 @@ bench_print_hw_context(const char *name)
 	}
 #else
 	{
-		size_t len;
+		char speed[64];
 
-		len = sizeof(model);
-		sysctlbyname("hw.model", model, &len, NULL, 0);
+		(void)bench_read_first_line("sysctl -n hw.model 2>/dev/null",
+					    model, sizeof(model));
 
-		{
-			uint64_t freq = 0;
-			size_t flen = sizeof(freq);
+		if (bench_read_first_line("sysctl -n hw.cpuspeed 2>/dev/null",
+					  speed, sizeof(speed)) == BRAID_OK) {
+			snprintf(mhz, sizeof(mhz), "%s MHz", speed);
+		} else if (bench_read_first_line(
+			       "sysctl -n hw.cpufrequency 2>/dev/null", speed,
+			       sizeof(speed)) == BRAID_OK) {
+			char *end = NULL;
+			unsigned long long hz = strtoull(speed, &end, 10);
 
-			if (sysctlbyname("hw.cpufrequency", &freq, &flen, NULL,
-					 0) == 0 &&
-			    freq > 0) {
-				double ghz = (double)freq / 1000000000.0;
-
-				snprintf(mhz, sizeof(mhz), "%.2f GHz", ghz);
-			}
+			if (end != speed && hz > 0ULL)
+				snprintf(mhz, sizeof(mhz), "%.2f GHz",
+					 (double)hz / 1000000000.0);
+			else
+				snprintf(mhz, sizeof(mhz), "%s", speed);
 		}
 	}
 #endif
