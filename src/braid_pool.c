@@ -12,7 +12,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
+#ifdef __linux__
+#include <sys/random.h> /* getentropy on Linux with strict POSIX macros */
+#else
+/* arc4random_buf is in OpenBSD/BSD libc but its prototype is hidden when
+ * _POSIX_C_SOURCE suppresses __BSD_VISIBLE.  Forward-declare with the
+ * known stable ABI signature rather than relaxing feature-test macros. */
+void arc4random_buf(void *, size_t);
+#endif
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
@@ -275,12 +282,20 @@ braid_pool_create(const braid_config_t *config, int *err)
 		goto cleanup;
 
 	/*
-	 * Seed per-pool PRNG via getentropy().  Non-zero is required for
-	 * the xorshift64 algorithm in pool_prng_next().  If getentropy()
-	 * returns zero bits (astronomically unlikely), fall back to a
-	 * non-zero constant.  See ARCHITECTURE.md §6.2.
+	 * Seed per-pool PRNG.  Non-zero is required for the xorshift64
+	 * algorithm in pool_prng_next().  If the entropy call returns zero
+	 * bits (astronomically unlikely), fall back to a non-zero constant.
+	 * See ARCHITECTURE.md §6.2.
+	 *
+	 * getentropy() is used on Linux (declared in <sys/random.h>).
+	 * arc4random_buf() is used on OpenBSD/BSD (always visible in libc,
+	 * not gated by feature-test macros).
 	 */
+#ifdef __linux__
 	getentropy(&pool->prng, sizeof(pool->prng));
+#else
+	arc4random_buf(&pool->prng, sizeof(pool->prng));
+#endif
 	if (pool->prng == 0)
 		pool->prng = 0x9e3779b97f4a7c15ULL;
 

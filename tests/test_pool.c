@@ -184,7 +184,6 @@ alloc_idle_conn_on_epoll(braid_pool_t *pool, int *peer_fd_out)
 {
 	int sv[2];
 	braid_conn_t *conn;
-	struct epoll_event ev;
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
 		return NULL;
@@ -195,15 +194,36 @@ alloc_idle_conn_on_epoll(braid_pool_t *pool, int *peer_fd_out)
 		return NULL;
 	}
 
-	/* Register fd[0] on epoll before transitioning (IDLE registers READ).
+	/*
+	 * Pre-register the fd with the event poller before transitioning, to
+	 * match what the pool's normal reconnect path does.  The API differs
+	 * by platform; on kqueue EV_ADD creates-or-updates.
 	 */
-	ev.events = EPOLLIN | EPOLLET;
-	ev.data.ptr = &conn->tag;
-	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_ADD, sv[0], &ev) != 0) {
-		close(sv[0]);
-		close(sv[1]);
-		return NULL;
+#ifdef __linux__
+	{
+		struct epoll_event ev;
+		ev.events = EPOLLIN | EPOLLET;
+		ev.data.ptr = &conn->tag;
+		if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_ADD, sv[0],
+			      &ev) != 0) {
+			close(sv[0]);
+			close(sv[1]);
+			return NULL;
+		}
 	}
+#else
+	{
+		struct kevent kev;
+		EV_SET(&kev, (uintptr_t)sv[0], EVFILT_READ, EV_ADD, 0, 0,
+		       &conn->tag);
+		if (kevent(pool->config.event_fd, &kev, 1, NULL, 0, NULL) !=
+		    0) {
+			close(sv[0]);
+			close(sv[1]);
+			return NULL;
+		}
+	}
+#endif
 
 	if (conn_transition(pool, conn, BRAID_STATE_INITIALIZING) != BRAID_OK) {
 		close(sv[1]);
@@ -231,7 +251,6 @@ alloc_connecting_conn_on_epoll(braid_pool_t *pool, int *peer_fd_out)
 {
 	int sv[2];
 	braid_conn_t *conn;
-	struct epoll_event ev;
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
 		return NULL;
@@ -242,13 +261,32 @@ alloc_connecting_conn_on_epoll(braid_pool_t *pool, int *peer_fd_out)
 		return NULL;
 	}
 
-	ev.events = EPOLLOUT | EPOLLET;
-	ev.data.ptr = &conn->tag;
-	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_ADD, sv[0], &ev) != 0) {
-		close(sv[0]);
-		close(sv[1]);
-		return NULL;
+	/* Pre-register WRITE interest — see alloc_idle_conn_on_epoll. */
+#ifdef __linux__
+	{
+		struct epoll_event ev;
+		ev.events = EPOLLOUT | EPOLLET;
+		ev.data.ptr = &conn->tag;
+		if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_ADD, sv[0],
+			      &ev) != 0) {
+			close(sv[0]);
+			close(sv[1]);
+			return NULL;
+		}
 	}
+#else
+	{
+		struct kevent kev;
+		EV_SET(&kev, (uintptr_t)sv[0], EVFILT_WRITE, EV_ADD, 0, 0,
+		       &conn->tag);
+		if (kevent(pool->config.event_fd, &kev, 1, NULL, 0, NULL) !=
+		    0) {
+			close(sv[0]);
+			close(sv[1]);
+			return NULL;
+		}
+	}
+#endif
 
 	if (peer_fd_out != NULL)
 		*peer_fd_out = sv[1];
@@ -530,19 +568,24 @@ test_active_event_registration_handoff(void)
 	braid_pool_t *pool;
 	braid_conn_t *conn;
 	cb_recorder_t rec;
-	struct epoll_event ev;
 	int err = 0;
 	int epfd, peer_fd;
-	int fd, rc;
+	int fd;
+#ifdef __linux__
+	struct epoll_event ev;
+	int rc;
+#endif
 
 	memset(&rec, 0, sizeof(rec));
+#ifdef __linux__
 	memset(&ev, 0, sizeof(ev));
 	ev.events = EPOLLIN | EPOLLET;
 	ev.data.ptr = NULL;
+#endif
 
 	epfd = make_epoll_fd();
 	if (epfd < 0) {
-		CHECK("active-handoff: epoll_create1", 0);
+		CHECK("active-handoff: event_fd", 0);
 		return;
 	}
 
@@ -569,21 +612,25 @@ test_active_event_registration_handoff(void)
 	CHECK("active-handoff: callback fired", rec.call_count == 1);
 	fd = rec.fd[0];
 
+#ifdef __linux__
 	errno = 0;
 	rc = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 	CHECK("active-handoff: caller can add ACTIVE fd", rc == 0);
 	if (rc == 0)
 		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+#endif
 
 	CHECK_ERR("active-handoff: checkin OK",
 		  braid_pool_checkin(pool, fd, BRAID_CONN_OK), BRAID_OK);
 
+#ifdef __linux__
 	errno = 0;
 	rc = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 	CHECK("active-handoff: pool restored IDLE watch (EEXIST)",
 	      rc == -1 && errno == EEXIST);
 	if (rc == 0)
 		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+#endif
 
 	CHECK_ERR(
 	    "active-handoff: checkout for cleanup",

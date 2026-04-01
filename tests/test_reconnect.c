@@ -551,20 +551,35 @@ fake_socket_create_immediate(braid_pool_t *pool, struct addrinfo *ai,
 	return BRAID_OK;
 }
 
+/*
+ * fake_io_watch_fail — io_watch test hook that always returns SYSCALL error.
+ * Used with fake_socket_create_immediate_watch_fail and
+ * fake_socket_create_einprogress_watch_fail to simulate io_watch() failure
+ * in a platform-independent way (avoids relying on epoll vs kqueue behaviour
+ * for specific fd types).
+ */
+static int
+fake_io_watch_fail(braid_pool_t *pool, int fd, uint32_t events)
+{
+	(void)pool;
+	(void)fd;
+	(void)events;
+	return BRAID_ERR_SYSCALL;
+}
+
 static int
 fake_socket_create_immediate_watch_fail(braid_pool_t *pool, struct addrinfo *ai,
 					int *fd_out, int *immediate_out)
 {
-	int fd;
+	int sv[2];
 
 	(void)pool;
 	(void)ai;
 
-	fd = open("/dev/null", O_RDONLY);
-	if (fd < 0)
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
 		return BRAID_ERR_SYSCALL;
-
-	*fd_out = fd;
+	close(sv[1]);
+	*fd_out = sv[0];
 	*immediate_out = 1;
 	return BRAID_OK;
 }
@@ -574,16 +589,15 @@ fake_socket_create_einprogress_watch_fail(braid_pool_t *pool,
 					  struct addrinfo *ai, int *fd_out,
 					  int *immediate_out)
 {
-	int fd;
+	int sv[2];
 
 	(void)pool;
 	(void)ai;
 
-	fd = open("/dev/null", O_RDONLY);
-	if (fd < 0)
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
 		return BRAID_ERR_SYSCALL;
-
-	*fd_out = fd;
+	close(sv[1]);
+	*fd_out = sv[0];
 	*immediate_out = 0;
 	return BRAID_OK;
 }
@@ -843,9 +857,11 @@ test_immediate_watch_failure_discards_and_schedules_retry(void)
 	reset_reconnect_counters();
 	reconnect_test_set_socket_create_hook(
 	    fake_socket_create_immediate_watch_fail);
+	reconnect_test_set_io_watch_hook(fake_io_watch_fail);
 	pool = make_testpool(8, 0, "127.0.0.1", 8080, cb_reconnect_observe);
 	if (pool == NULL) {
 		CHECK("immediate_watch_failure: alloc", 0);
+		reconnect_test_set_io_watch_hook(NULL);
 		reconnect_test_set_socket_create_hook(NULL);
 		return;
 	}
@@ -874,6 +890,7 @@ test_immediate_watch_failure_discards_and_schedules_retry(void)
 	      g_last_reconnect_event.reconnect_attempt.attempt == 2);
 
 	free_testpool(pool);
+	reconnect_test_set_io_watch_hook(NULL);
 	reconnect_test_set_socket_create_hook(NULL);
 }
 
@@ -890,9 +907,11 @@ test_einprogress_watch_failure_discards_and_schedules_retry(void)
 	reset_reconnect_counters();
 	reconnect_test_set_socket_create_hook(
 	    fake_socket_create_einprogress_watch_fail);
+	reconnect_test_set_io_watch_hook(fake_io_watch_fail);
 	pool = make_testpool(8, 0, "127.0.0.1", 8080, cb_reconnect_observe);
 	if (pool == NULL) {
 		CHECK("einprogress_watch_failure: alloc", 0);
+		reconnect_test_set_io_watch_hook(NULL);
 		reconnect_test_set_socket_create_hook(NULL);
 		return;
 	}
@@ -921,6 +940,7 @@ test_einprogress_watch_failure_discards_and_schedules_retry(void)
 	      g_last_reconnect_event.reconnect_attempt.attempt == 4);
 
 	free_testpool(pool);
+	reconnect_test_set_io_watch_hook(NULL);
 	reconnect_test_set_socket_create_hook(NULL);
 }
 

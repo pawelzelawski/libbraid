@@ -68,7 +68,8 @@ int
 io_modify(braid_pool_t *pool, int fd, uint32_t events)
 {
 	braid_conn_t *conn;
-	struct kevent changes[4];
+	struct kevent kev;
+	struct kevent adds[2];
 	int n = 0;
 
 	if (table_lookup(pool, fd, &conn) != BRAID_OK) {
@@ -77,40 +78,44 @@ io_modify(braid_pool_t *pool, int fd, uint32_t events)
 	}
 
 	/*
-	 * kqueue has no EPOLL_CTL_MOD equivalent — delete existing filters
-	 * then add the new ones. Delete both unconditionally; ENOENT is
-	 * tolerated by kq_apply if the filter was not registered.
-	 * SAFETY: EV_DELETE kevents do not dereference udata; pass NULL.
+	 * kqueue has no EPOLL_CTL_MOD equivalent.  Delete each filter
+	 * individually: a missing-filter ENOENT on the first delete would
+	 * abort the changelist before the second delete is submitted when
+	 * nevents == 0 (kqueue stops at the first error it cannot store).
+	 * kq_apply tolerates ENOENT.
+	 * SAFETY: EV_DELETE does not dereference udata; pass NULL.
 	 */
-	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0,
-	       NULL);
-	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0,
-	       NULL);
+	EV_SET(&kev, (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+	kq_apply(pool->config.event_fd, &kev, 1);
+
+	EV_SET(&kev, (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+	kq_apply(pool->config.event_fd, &kev, 1);
+
 	if (events & BRAID_IO_READ)
-		EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD, 0, 0,
+		EV_SET(&adds[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD, 0, 0,
 		       &conn->tag);
 	if (events & BRAID_IO_WRITE)
-		EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD, 0, 0,
+		EV_SET(&adds[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD, 0, 0,
 		       &conn->tag);
 
-	/*
-	 * Submit deletes first as a batch; if kevent() returns -1 for a
-	 * reason other than ENOENT, propagate the error before attempting
-	 * the adds.
-	 */
-	return kq_apply(pool->config.event_fd, changes, n);
+	if (n == 0)
+		return BRAID_OK;
+
+	return kq_apply(pool->config.event_fd, adds, n);
 }
 
 int
 io_unwatch(braid_pool_t *pool, int fd)
 {
-	struct kevent changes[2];
-	int n = 0;
+	struct kevent kev;
 
-	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0,
-	       NULL);
-	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0,
-	       NULL);
+	/*
+	 * Delete each filter individually: see io_modify comment above for
+	 * why a batch EV_DELETE can silently skip filters.
+	 */
+	EV_SET(&kev, (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+	kq_apply(pool->config.event_fd, &kev, 1);
 
-	return kq_apply(pool->config.event_fd, changes, n);
+	EV_SET(&kev, (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+	return kq_apply(pool->config.event_fd, &kev, 1);
 }

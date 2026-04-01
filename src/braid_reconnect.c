@@ -29,6 +29,7 @@
 static int (*reconnect_test_socket_create_hook)(braid_pool_t *,
 						struct addrinfo *, int *,
 						int *);
+static int (*reconnect_test_io_watch_hook)(braid_pool_t *, int, uint32_t);
 #endif
 
 /* ── PRNG helpers ─────────────────────────────────────────────────────── */
@@ -90,13 +91,16 @@ reconnect_test_set_socket_create_hook(int (*hook)(braid_pool_t *,
 {
 	reconnect_test_socket_create_hook = hook;
 }
+
+void
+reconnect_test_set_io_watch_hook(int (*hook)(braid_pool_t *, int, uint32_t))
+{
+	reconnect_test_io_watch_hook = hook;
+}
 #endif
 
 /* ── min-heap helpers ─────────────────────────────────────────────────── */
 
-/*
- * heap_swap — exchange two entries by index.
- */
 static void
 heap_swap(braid_reconnect_heap_t *heap, uint32_t a, uint32_t b)
 {
@@ -465,7 +469,13 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 		}
 
 		conn_transition(pool, conn, BRAID_STATE_IDLE);
-		rc = io_watch(pool, fd, BRAID_IO_READ);
+#ifdef BRAID_TEST_CLOCK
+		if (reconnect_test_io_watch_hook != NULL)
+			rc = reconnect_test_io_watch_hook(pool, fd,
+							  BRAID_IO_READ);
+		else
+#endif
+			rc = io_watch(pool, fd, BRAID_IO_READ);
 		if (rc != BRAID_OK) {
 			reconnect_dead_without_floor_retry(pool, conn, 1);
 			reconnect_schedule_retry(pool, entry.attempt);
@@ -478,7 +488,13 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 		 * (set by conn_alloc). Register for writability; connect
 		 * completion is signalled via braid_pool_notify() (Phase 6).
 		 */
-		rc = io_watch(pool, fd, BRAID_IO_WRITE);
+#ifdef BRAID_TEST_CLOCK
+		if (reconnect_test_io_watch_hook != NULL)
+			rc = reconnect_test_io_watch_hook(pool, fd,
+							  BRAID_IO_WRITE);
+		else
+#endif
+			rc = io_watch(pool, fd, BRAID_IO_WRITE);
 		if (rc != BRAID_OK) {
 			reconnect_dead_without_floor_retry(pool, conn, 0);
 			reconnect_schedule_retry(pool, entry.attempt);

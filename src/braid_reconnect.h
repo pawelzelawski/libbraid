@@ -30,6 +30,8 @@ struct addrinfo;
 void reconnect_test_set_socket_create_hook(int (*hook)(braid_pool_t *,
 						       struct addrinfo *, int *,
 						       int *));
+void reconnect_test_set_io_watch_hook(int (*hook)(braid_pool_t *, int,
+						  uint32_t));
 #endif
 
 #endif /* BRAID_RECONNECT_H */
