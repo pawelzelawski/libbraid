@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -283,6 +284,27 @@ bench_pool_idle_count(braid_pool_t *pool)
 	}
 
 	return count;
+}
+
+uint32_t
+bench_fd_budget(void)
+{
+	struct rlimit lim;
+	const rlim_t reserve = (rlim_t)64;
+
+	if (getrlimit(RLIMIT_NOFILE, &lim) != 0)
+		return UINT32_MAX;
+
+	if (lim.rlim_cur == RLIM_INFINITY)
+		return UINT32_MAX;
+
+	if (lim.rlim_cur <= reserve)
+		return 0;
+
+	if (lim.rlim_cur - reserve > (rlim_t)UINT32_MAX)
+		return UINT32_MAX;
+
+	return (uint32_t)(lim.rlim_cur - reserve);
 }
 
 int

@@ -11,6 +11,7 @@
 static int
 run_case(uint32_t pool_size, uint32_t iterations)
 {
+	uint32_t fd_budget;
 	pid_t server_pid = -1;
 	uint16_t port = 0;
 	int event_fd = -1;
@@ -22,6 +23,14 @@ run_case(uint32_t pool_size, uint32_t iterations)
 	uint32_t i;
 	int err = 0;
 	int rc = 0;
+
+	fd_budget = bench_fd_budget();
+	if (pool_size > fd_budget) {
+		printf("checkout with immediate connection (pool size %u): "
+		       "skipped (fd budget %u)\n",
+		       pool_size, fd_budget);
+		return 0;
+	}
 
 	if (bench_start_server(&server_pid, &port) != BRAID_OK)
 		return 1;

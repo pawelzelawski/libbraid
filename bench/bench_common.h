@@ -24,6 +24,7 @@ int bench_start_server(pid_t *pid_out, uint16_t *port_out);
 void bench_stop_server(pid_t pid);
 int bench_event_loop_step(braid_pool_t *pool, int event_fd, int max_wait_ms);
 uint32_t bench_pool_idle_count(braid_pool_t *pool);
+uint32_t bench_fd_budget(void);
 int bench_warm_pool(braid_pool_t *pool, int event_fd, uint32_t want_idle,
 		    int max_steps);
 void bench_print_hw_context(const char *name);
