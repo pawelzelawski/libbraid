@@ -290,7 +290,7 @@ uint32_t
 bench_fd_budget(void)
 {
 	struct rlimit lim;
-	const rlim_t reserve = (rlim_t)64;
+	const rlim_t reserve = (rlim_t)16;
 
 	if (getrlimit(RLIMIT_NOFILE, &lim) != 0)
 		return UINT32_MAX;
