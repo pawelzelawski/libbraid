@@ -124,13 +124,16 @@ waitq_cancel(braid_ring_t *ring, braid_token_t token)
 }
 
 /*
- * waitq_expire — scan from head and invoke BRAID_ERR_TIMEOUT for every
- * non-tombstone waiter whose deadline_ms <= now_ms (deadline_ms == 0
+ * waitq_expire_with_hook — scan from head and invoke BRAID_ERR_TIMEOUT for
+ * every non-tombstone waiter whose deadline_ms <= now_ms (deadline_ms == 0
  * means no timeout and is never expired). Stops at the first non-tombstone
  * entry whose deadline has not yet passed.
+ *
+ * If hook is non-NULL, it is called immediately before each timeout callback.
  */
 void
-waitq_expire(braid_ring_t *ring, uint64_t now_ms)
+waitq_expire_with_hook(braid_ring_t *ring, uint64_t now_ms,
+		       waitq_expire_hook_fn hook, void *hook_ctx)
 {
 	braid_waiter_t *slot;
 
@@ -150,10 +153,21 @@ waitq_expire(braid_ring_t *ring, uint64_t now_ms)
 		slot->flags |= WAITER_FLAG_TOMBSTONE;
 		ring->count--;
 		ring->head++;
+		if (hook != NULL)
+			hook(hook_ctx);
 		/* SAFETY: tombstone before callback; prevents
 		 * double-invocation. */
 		slot->cb(-1, NULL, BRAID_ERR_TIMEOUT, slot->cb_ctx);
 	}
+}
+
+/*
+ * waitq_expire — legacy wrapper with no timeout hook.
+ */
+void
+waitq_expire(braid_ring_t *ring, uint64_t now_ms)
+{
+	waitq_expire_with_hook(ring, now_ms, NULL, NULL);
 }
 
 /*

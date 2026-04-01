@@ -38,6 +38,7 @@ void arc4random_buf(void *, size_t);
 static int pool_serve_waiter(braid_pool_t *pool);
 
 static void pool_fire_conn_destroyed_event(braid_pool_t *pool, int fd);
+static void pool_waitq_timeout_event_hook(void *hook_ctx);
 
 /*
  * pool_drain_deferred — process all flagged deferred work.
@@ -122,6 +123,14 @@ pool_fire_conn_destroyed_event(braid_pool_t *pool, int fd)
 	pool->in_callback--;
 	if (pool->in_callback == 0 && pool->deferred_work != 0)
 		pool_drain_deferred(pool);
+}
+
+static void
+pool_waitq_timeout_event_hook(void *hook_ctx)
+{
+	braid_pool_t *pool = hook_ctx;
+
+	pool_fire_event(pool, BRAID_EV_CHECKOUT_TIMEOUT);
 }
 
 /* ── pool_serve_waiter ───────────────────────────────────────────────── */
@@ -759,8 +768,9 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 		}
 	}
 
-	/* Step 4: expire wait queue entries. */
-	waitq_expire(&pool->waitq, now_ms);
+	/* Step 4: expire wait queue entries and fire timeout events. */
+	waitq_expire_with_hook(&pool->waitq, now_ms,
+			       pool_waitq_timeout_event_hook, pool);
 	{
 		/*
 		 * Walk the occupied ring span to find the soonest

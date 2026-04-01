@@ -19,6 +19,9 @@ int waitq_enqueue(braid_ring_t *ring, braid_checkout_cb cb, void *cb_ctx,
 		  uint64_t deadline_ms, braid_token_t *token);
 int waitq_serve_head(braid_ring_t *ring, int fd, void *conn_ctx);
 int waitq_cancel(braid_ring_t *ring, braid_token_t token);
+typedef void (*waitq_expire_hook_fn)(void *hook_ctx);
+void waitq_expire_with_hook(braid_ring_t *ring, uint64_t now_ms,
+			    waitq_expire_hook_fn hook, void *hook_ctx);
 void waitq_expire(braid_ring_t *ring, uint64_t now_ms);
 void waitq_shutdown(braid_ring_t *ring);
 
