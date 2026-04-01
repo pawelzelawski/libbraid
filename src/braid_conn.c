@@ -307,31 +307,40 @@ int
 conn_keepalive_configure(int fd, const braid_config_t *config)
 {
 	int one = 1;
-	int idle = config->keepalive_idle ? (int)config->keepalive_idle
-					  : BRAID_KEEPALIVE_IDLE_DEFAULT;
-	int intvl = config->keepalive_interval ? (int)config->keepalive_interval
-					       : BRAID_KEEPALIVE_INTVL_DEFAULT;
-	int cnt = config->keepalive_count ? (int)config->keepalive_count
-					  : BRAID_KEEPALIVE_CNT_DEFAULT;
 
 	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) == -1)
 		return BRAID_ERR_SYSCALL;
 
 #ifdef TCP_KEEPIDLE
-	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) ==
-	    -1)
-		return BRAID_ERR_SYSCALL;
+	{
+		int idle = config->keepalive_idle
+			       ? (int)config->keepalive_idle
+			       : BRAID_KEEPALIVE_IDLE_DEFAULT;
+		if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle,
+			       sizeof(idle)) == -1)
+			return BRAID_ERR_SYSCALL;
+	}
 #endif
 
 #ifdef TCP_KEEPINTVL
-	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)) ==
-	    -1)
-		return BRAID_ERR_SYSCALL;
+	{
+		int intvl = config->keepalive_interval
+				? (int)config->keepalive_interval
+				: BRAID_KEEPALIVE_INTVL_DEFAULT;
+		if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl,
+			       sizeof(intvl)) == -1)
+			return BRAID_ERR_SYSCALL;
+	}
 #endif
 
 #ifdef TCP_KEEPCNT
-	if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt)) == -1)
-		return BRAID_ERR_SYSCALL;
+	{
+		int cnt = config->keepalive_count ? (int)config->keepalive_count
+						  : BRAID_KEEPALIVE_CNT_DEFAULT;
+		if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt,
+			       sizeof(cnt)) == -1)
+			return BRAID_ERR_SYSCALL;
+	}
 #endif
 
 	return BRAID_OK;
