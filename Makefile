@@ -122,11 +122,11 @@ test-tsan: _check_clang $(BUILD_TESTS_DIR)/run_tests_tsan
 
 # Valgrind — Linux only; no sanitizers (ASan + Valgrind conflict)
 valgrind: $(TEST_BIN_VG)
-	valgrind --leak-check=full		\
-	         --show-leak-kinds=all		\
-	         --track-origins=yes		\
-	         --error-exitcode=1		\
-	         $(TEST_BIN_VG)
+	@valgrind --leak-check=full		\
+	          --show-leak-kinds=all		\
+	          --track-origins=yes		\
+	          --error-exitcode=1		\
+	          $(TEST_BIN_VG); rc=$$?; rm -f vgcore.*; exit $$rc
 
 # clang-tidy + cppcheck
 lint:

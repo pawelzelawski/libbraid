@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "../include/braid.h"
@@ -454,6 +456,7 @@ make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
 	      uint16_t port, braid_observe_fn observe_fn)
 {
 	braid_pool_t *pool;
+	int epfd;
 
 	pool = calloc(1, sizeof(*pool));
 	if (pool == NULL)
@@ -464,6 +467,12 @@ make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
 	pool->config.backoff_max_attempts = max_attempts;
 	pool->config.host = host;
 	pool->config.port = port;
+	epfd = epoll_create1(EPOLL_CLOEXEC);
+	if (epfd < 0) {
+		free(pool);
+		return NULL;
+	}
+	pool->config.event_fd = epfd;
 	pool->config.backoff_base = 100;
 	pool->config.backoff_cap = 30000;
 	pool->config.observe_fn = observe_fn;
@@ -471,17 +480,20 @@ make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
 
 	if (reconnect_heap_init(&pool->reconnect, max_connections) !=
 	    BRAID_OK) {
+		close(epfd);
 		free(pool);
 		return NULL;
 	}
 	if (table_init(pool) != BRAID_OK) {
 		reconnect_heap_destroy(&pool->reconnect);
+		close(epfd);
 		free(pool);
 		return NULL;
 	}
 	if (reaper_heap_init(&pool->idle, max_connections) != BRAID_OK) {
 		table_destroy(pool);
 		reconnect_heap_destroy(&pool->reconnect);
+		close(epfd);
 		free(pool);
 		return NULL;
 	}
@@ -491,6 +503,8 @@ make_testpool(uint32_t max_connections, uint32_t max_attempts, const char *host,
 static void
 free_testpool(braid_pool_t *pool)
 {
+	if (pool->config.event_fd >= 0)
+		close(pool->config.event_fd);
 	reaper_heap_destroy(&pool->idle);
 	table_destroy(pool);
 	reconnect_heap_destroy(&pool->reconnect);
@@ -524,6 +538,24 @@ static int
 fake_socket_create_immediate(braid_pool_t *pool, struct addrinfo *ai,
 			     int *fd_out, int *immediate_out)
 {
+	int sv[2];
+
+	(void)pool;
+	(void)ai;
+
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
+		return BRAID_ERR_SYSCALL;
+	close(sv[1]);
+
+	*fd_out = sv[0];
+	*immediate_out = 1;
+	return BRAID_OK;
+}
+
+static int
+fake_socket_create_immediate_watch_fail(braid_pool_t *pool, struct addrinfo *ai,
+					int *fd_out, int *immediate_out)
+{
 	int fd;
 
 	(void)pool;
@@ -535,6 +567,25 @@ fake_socket_create_immediate(braid_pool_t *pool, struct addrinfo *ai,
 
 	*fd_out = fd;
 	*immediate_out = 1;
+	return BRAID_OK;
+}
+
+static int
+fake_socket_create_einprogress_watch_fail(braid_pool_t *pool,
+					  struct addrinfo *ai, int *fd_out,
+					  int *immediate_out)
+{
+	int fd;
+
+	(void)pool;
+	(void)ai;
+
+	fd = open("/dev/null", O_RDONLY);
+	if (fd < 0)
+		return BRAID_ERR_SYSCALL;
+
+	*fd_out = fd;
+	*immediate_out = 0;
 	return BRAID_OK;
 }
 
@@ -780,6 +831,100 @@ test_connect_zero_fast_path_reaches_idle_without_writable_event(void)
 	reconnect_test_set_socket_create_hook(NULL);
 }
 
+/*
+ * If io_watch(READ) fails after immediate-connect initialisation, the
+ * connection must be discarded and exactly one retry attempt+1 enqueued.
+ */
+static void
+test_immediate_watch_failure_discards_and_schedules_retry(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	reset_reconnect_counters();
+	reconnect_test_set_socket_create_hook(
+	    fake_socket_create_immediate_watch_fail);
+	pool = make_testpool(8, 0, "127.0.0.1", 8080, cb_reconnect_observe);
+	if (pool == NULL) {
+		CHECK("immediate_watch_failure: alloc", 0);
+		reconnect_test_set_socket_create_hook(NULL);
+		return;
+	}
+
+	entry.attempt = 2;
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("immediate_watch_failure: retry enqueued",
+	      pool->reconnect.count == 1);
+	CHECK_ERR("immediate_watch_failure: peek retry",
+		  reconnect_heap_peek(&pool->reconnect, &entry), BRAID_OK);
+	CHECK("immediate_watch_failure: retry attempt incremented",
+	      entry.attempt == 3);
+	CHECK("immediate_watch_failure: connection discarded",
+	      find_live_conn(pool) == NULL);
+	CHECK("immediate_watch_failure: events fired",
+	      g_reconnect_event_count >= 1);
+	CHECK("immediate_watch_failure: last event type reconnect attempt",
+	      g_last_reconnect_event.type == BRAID_EV_RECONNECT_ATTEMPT);
+	CHECK("immediate_watch_failure: event success==0",
+	      g_last_reconnect_event.reconnect_attempt.success == 0);
+	CHECK("immediate_watch_failure: event attempt matches",
+	      g_last_reconnect_event.reconnect_attempt.attempt == 2);
+
+	free_testpool(pool);
+	reconnect_test_set_socket_create_hook(NULL);
+}
+
+/*
+ * If io_watch(WRITE) fails for EINPROGRESS connect, reconnect_advance must
+ * discard the connection and enqueue one retry with attempt incremented.
+ */
+static void
+test_einprogress_watch_failure_discards_and_schedules_retry(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	reset_reconnect_counters();
+	reconnect_test_set_socket_create_hook(
+	    fake_socket_create_einprogress_watch_fail);
+	pool = make_testpool(8, 0, "127.0.0.1", 8080, cb_reconnect_observe);
+	if (pool == NULL) {
+		CHECK("einprogress_watch_failure: alloc", 0);
+		reconnect_test_set_socket_create_hook(NULL);
+		return;
+	}
+
+	entry.attempt = 4;
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("einprogress_watch_failure: retry enqueued",
+	      pool->reconnect.count == 1);
+	CHECK_ERR("einprogress_watch_failure: peek retry",
+		  reconnect_heap_peek(&pool->reconnect, &entry), BRAID_OK);
+	CHECK("einprogress_watch_failure: retry attempt incremented",
+	      entry.attempt == 5);
+	CHECK("einprogress_watch_failure: connection discarded",
+	      find_live_conn(pool) == NULL);
+	CHECK("einprogress_watch_failure: events fired",
+	      g_reconnect_event_count >= 1);
+	CHECK("einprogress_watch_failure: last event type reconnect attempt",
+	      g_last_reconnect_event.type == BRAID_EV_RECONNECT_ATTEMPT);
+	CHECK("einprogress_watch_failure: event success==0",
+	      g_last_reconnect_event.reconnect_attempt.success == 0);
+	CHECK("einprogress_watch_failure: event attempt matches",
+	      g_last_reconnect_event.reconnect_attempt.attempt == 4);
+
+	free_testpool(pool);
+	reconnect_test_set_socket_create_hook(NULL);
+}
+
 /* ── test suite entry point ──────────────────────────────────────────── */
 
 void
@@ -803,4 +948,6 @@ run_reconnect_tests(void)
 	test_reconnect_attempt_event_fired();
 	test_reconnect_entry_inserted_only_on_failure();
 	test_connect_zero_fast_path_reaches_idle_without_writable_event();
+	test_immediate_watch_failure_discards_and_schedules_retry();
+	test_einprogress_watch_failure_discards_and_schedules_retry();
 }

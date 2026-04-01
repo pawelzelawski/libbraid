@@ -341,6 +341,26 @@ reconnect_schedule_retry(braid_pool_t *pool, uint32_t attempt)
 }
 
 /*
+ * reconnect_dead_without_floor_retry — transition a failed reconnect attempt
+ * to DEAD without triggering conn_transition()'s min_connections refill push.
+ * reconnect_attempt() schedules its own backoff retry entry for this path.
+ */
+static void
+reconnect_dead_without_floor_retry(braid_pool_t *pool, braid_conn_t *conn,
+				   int from_idle)
+{
+	uint32_t saved_min;
+
+	saved_min = pool->config.min_connections;
+	pool->config.min_connections = 0;
+	if (from_idle)
+		conn_transition(pool, conn, BRAID_STATE_CLOSING);
+	else
+		conn_transition(pool, conn, BRAID_STATE_DEAD);
+	pool->config.min_connections = saved_min;
+}
+
+/*
  * reconnect_attempt — perform one reconnection attempt for the given entry.
  *
  * Flow per ARCHITECTURE.md §6.3:
@@ -434,7 +454,8 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 				pool_drain_deferred(pool);
 
 			if (init_rc != BRAID_OK) {
-				conn_transition(pool, conn, BRAID_STATE_DEAD);
+				reconnect_dead_without_floor_retry(pool, conn,
+								   0);
 				reconnect_schedule_retry(pool, entry.attempt);
 				reconnect_fire_event(pool, -1, entry.attempt,
 						     0);
@@ -443,14 +464,26 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 		}
 
 		conn_transition(pool, conn, BRAID_STATE_IDLE);
-		io_watch(pool, fd, BRAID_IO_READ);
+		rc = io_watch(pool, fd, BRAID_IO_READ);
+		if (rc != BRAID_OK) {
+			reconnect_dead_without_floor_retry(pool, conn, 1);
+			reconnect_schedule_retry(pool, entry.attempt);
+			reconnect_fire_event(pool, -1, entry.attempt, 0);
+			return BRAID_OK;
+		}
 	} else {
 		/*
 		 * Step 5b: EINPROGRESS — conn already in CONNECTING state
 		 * (set by conn_alloc). Register for writability; connect
 		 * completion is signalled via braid_pool_notify() (Phase 6).
 		 */
-		io_watch(pool, fd, BRAID_IO_WRITE);
+		rc = io_watch(pool, fd, BRAID_IO_WRITE);
+		if (rc != BRAID_OK) {
+			reconnect_dead_without_floor_retry(pool, conn, 0);
+			reconnect_schedule_retry(pool, entry.attempt);
+			reconnect_fire_event(pool, -1, entry.attempt, 0);
+			return BRAID_OK;
+		}
 	}
 
 	/* Step 6: fire success event (attempt in progress or completed). */

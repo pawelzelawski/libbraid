@@ -30,6 +30,8 @@
 /* Forward declaration: defined after pool_fire_event and pool_active_count. */
 static int pool_serve_waiter(braid_pool_t *pool);
 
+static void pool_fire_conn_destroyed_event(braid_pool_t *pool, int fd);
+
 /*
  * pool_drain_deferred — process all flagged deferred work.
  *
@@ -90,7 +92,29 @@ pool_fire_event(braid_pool_t *pool, braid_event_type_t type)
 	memset(&ev, 0, sizeof(ev));
 	ev.type = type;
 	ev.fd = -1;
+	pool->in_callback++;
 	pool->config.observe_fn(&ev, pool->config.hook_context);
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
+}
+
+static void
+pool_fire_conn_destroyed_event(braid_pool_t *pool, int fd)
+{
+	braid_event_t ev;
+
+	if (pool->config.observe_fn == NULL)
+		return;
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = BRAID_EV_CONN_DESTROYED;
+	ev.fd = fd;
+	pool->in_callback++;
+	pool->config.observe_fn(&ev, pool->config.hook_context);
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
 }
 
 /* ── pool_serve_waiter ───────────────────────────────────────────────── */
@@ -122,6 +146,11 @@ pool_serve_waiter(braid_pool_t *pool)
 			continue;
 		if (conn->state != BRAID_STATE_IDLE)
 			continue;
+
+		if (io_unwatch(pool, conn->fd) != BRAID_OK) {
+			conn_transition(pool, conn, BRAID_STATE_CLOSING);
+			continue;
+		}
 
 		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
 		pool->in_callback++;
@@ -326,6 +355,7 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 	if (drain_timeout_ms > 0) {
 		uint64_t deadline_ms;
 		struct timespec ts;
+		uint32_t next_ms;
 
 		deadline_ms = braid_now_ms() + drain_timeout_ms;
 		ts.tv_sec = 0;
@@ -333,6 +363,7 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 		while (pool_active_count(pool) > 0) {
 			if (braid_now_ms() >= deadline_ms)
 				break;
+			braid_pool_advance(pool, &next_ms);
 			nanosleep(&ts, NULL);
 		}
 	}
@@ -364,14 +395,7 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 		    "braid_pool_destroy: live_count underflow (CONNECTING)");
 		pool->live_count--;
 
-		if (pool->config.observe_fn != NULL) {
-			braid_event_t ev;
-
-			memset(&ev, 0, sizeof(ev));
-			ev.type = BRAID_EV_CONN_DESTROYED;
-			ev.fd = fd;
-			pool->config.observe_fn(&ev, pool->config.hook_context);
-		}
+		pool_fire_conn_destroyed_event(pool, fd);
 	}
 
 	/*
@@ -454,6 +478,9 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 	uint64_t now_ms;
 	uint32_t i;
 
+	if (pool == NULL || cb == NULL)
+		return BRAID_ERR_INVAL;
+
 	if (pool->shutting_down)
 		return BRAID_ERR_SHUTDOWN;
 
@@ -500,6 +527,11 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 		}
 
 		/* Found a valid IDLE connection — serve immediately. */
+		if (io_unwatch(pool, conn->fd) != BRAID_OK) {
+			conn_transition(pool, conn, BRAID_STATE_CLOSING);
+			continue;
+		}
+
 		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
 		pool->in_callback++;
 		cb(conn->fd, conn->conn_ctx, BRAID_OK, cb_ctx);
@@ -559,6 +591,9 @@ braid_pool_checkin(braid_pool_t *pool, int fd, int flags)
 	braid_conn_t *conn;
 	int rc;
 
+	if (pool == NULL)
+		return BRAID_ERR_INVAL;
+
 	rc = table_lookup(pool, fd, &conn);
 	if (rc != BRAID_OK)
 		return BRAID_ERR_INVAL;
@@ -571,6 +606,11 @@ braid_pool_checkin(braid_pool_t *pool, int fd, int flags)
 
 	if (flags == BRAID_CONN_OK) {
 		conn_transition(pool, conn, BRAID_STATE_IDLE);
+		rc = io_watch(pool, conn->fd, BRAID_IO_READ);
+		if (rc != BRAID_OK) {
+			conn_transition(pool, conn, BRAID_STATE_CLOSING);
+			return BRAID_ERR_SYSCALL;
+		}
 		/*
 		 * Serve wait queue unless we are inside a callback.
 		 * Re-entrancy guard: if in_callback > 0, a checkin from
@@ -607,6 +647,9 @@ braid_pool_cancel(braid_pool_t *pool, braid_token_t token)
 {
 	int rc;
 
+	if (pool == NULL)
+		return BRAID_ERR_INVAL;
+
 	pool->in_callback++;
 	rc = waitq_cancel(&pool->waitq, token);
 	pool->in_callback--;
@@ -641,6 +684,9 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 	uint64_t now_ms;
 	uint64_t earliest_ms;
 	uint32_t i;
+
+	if (pool == NULL)
+		return BRAID_ERR_INVAL;
 
 	now_ms = braid_now_ms();
 	earliest_ms = UINT64_MAX;
@@ -773,6 +819,9 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 {
 	braid_conn_t *conn;
 
+	if (pool == NULL)
+		return BRAID_ERR_INVAL;
+
 	(void)events; /* dispatch by state, not event bits */
 
 	if (table_lookup(pool, fd, &conn) != BRAID_OK)
@@ -813,10 +862,15 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 				conn_transition(pool, conn, BRAID_STATE_DEAD);
 				break;
 			}
+			if (braid_now_ms() > deadline_ms) {
+				conn_transition(pool, conn, BRAID_STATE_DEAD);
+				break;
+			}
 		}
 
 		conn_transition(pool, conn, BRAID_STATE_IDLE);
-		io_modify(pool, fd, BRAID_IO_READ);
+		if (io_modify(pool, fd, BRAID_IO_READ) != BRAID_OK)
+			conn_transition(pool, conn, BRAID_STATE_CLOSING);
 		break;
 	}
 

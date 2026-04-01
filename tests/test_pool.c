@@ -103,6 +103,7 @@ recording_validate_cb(int fd, void *conn_ctx, void *hook, uint64_t deadline_ms)
 
 static int g_init_calls;
 static int g_init_return;
+static uint64_t g_init_advance_ms;
 
 static int
 recording_init_cb(int fd, void **conn_ctx_out, void *hook, uint64_t deadline_ms)
@@ -112,6 +113,10 @@ recording_init_cb(int fd, void **conn_ctx_out, void *hook, uint64_t deadline_ms)
 	(void)hook;
 	(void)deadline_ms;
 	g_init_calls++;
+#ifdef BRAID_TEST_CLOCK
+	if (g_init_advance_ms > 0)
+		braid_test_clock_ms += g_init_advance_ms;
+#endif
 	return g_init_return;
 }
 
@@ -126,6 +131,7 @@ reset_counters(void)
 	g_validate_return = BRAID_OK;
 	g_init_calls = 0;
 	g_init_return = BRAID_OK;
+	g_init_advance_ms = 0;
 }
 
 /* ── pool factory helpers ─────────────────────────────────────────────── */
@@ -330,6 +336,58 @@ test_pool_create_min_gt_max(void)
 }
 
 /*
+ * Public API NULL-argument handling for pool pointer and callback pointer.
+ * Functions must return BRAID_ERR_INVAL rather than crash.
+ */
+static void
+test_api_null_argument_guards(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	cb_recorder_t rec;
+	int err = 0;
+	int epfd;
+	uint32_t next_ms;
+
+	memset(&rec, 0, sizeof(rec));
+	next_ms = 0;
+
+	CHECK_ERR(
+	    "null-args: checkout NULL pool",
+	    braid_pool_checkout(NULL, 0, recording_checkout_cb, &rec, NULL),
+	    BRAID_ERR_INVAL);
+	CHECK_ERR("null-args: checkin NULL pool",
+		  braid_pool_checkin(NULL, 1, BRAID_CONN_OK), BRAID_ERR_INVAL);
+	CHECK_ERR("null-args: cancel NULL pool", braid_pool_cancel(NULL, 1),
+		  BRAID_ERR_INVAL);
+	CHECK_ERR("null-args: advance NULL pool",
+		  braid_pool_advance(NULL, &next_ms), BRAID_ERR_INVAL);
+	CHECK_ERR("null-args: notify NULL pool",
+		  braid_pool_notify(NULL, 1, BRAID_IO_READ), BRAID_ERR_INVAL);
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("null-args: epoll_create1", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("null-args: create", 0);
+		close(epfd);
+		return;
+	}
+
+	CHECK_ERR("null-args: checkout NULL callback",
+		  braid_pool_checkout(pool, 0, NULL, &rec, NULL),
+		  BRAID_ERR_INVAL);
+
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+/*
  * braid_pool_destroy with no live connections tears down cleanly.
  * Verified by Valgrind (no leaks) and by the test completing without crash.
  */
@@ -454,6 +512,85 @@ test_checkout_immediate(void)
 
 	/* Check in to clean up. */
 	braid_pool_checkin(pool, conn_fd, BRAID_CONN_DISCARD);
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+/*
+ * ACTIVE ownership handoff: checkout must unregister pool interest from epoll
+ * so caller can register the checked-out fd; checkin with BRAID_CONN_OK must
+ * restore pool read interest.
+ */
+static void
+test_active_event_registration_handoff(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	cb_recorder_t rec;
+	struct epoll_event ev;
+	int err = 0;
+	int epfd, peer_fd;
+	int fd, rc;
+
+	memset(&rec, 0, sizeof(rec));
+	memset(&ev, 0, sizeof(ev));
+	ev.events = EPOLLIN | EPOLLET;
+	ev.data.ptr = NULL;
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("active-handoff: epoll_create1", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("active-handoff: create", 0);
+		close(epfd);
+		return;
+	}
+
+	conn = alloc_idle_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("active-handoff: alloc_idle_conn", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+
+	CHECK_ERR(
+	    "active-handoff: checkout",
+	    braid_pool_checkout(pool, 0, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
+	CHECK("active-handoff: callback fired", rec.call_count == 1);
+	fd = rec.fd[0];
+
+	errno = 0;
+	rc = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
+	CHECK("active-handoff: caller can add ACTIVE fd", rc == 0);
+	if (rc == 0)
+		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+
+	CHECK_ERR("active-handoff: checkin OK",
+		  braid_pool_checkin(pool, fd, BRAID_CONN_OK), BRAID_OK);
+
+	errno = 0;
+	rc = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
+	CHECK("active-handoff: pool restored IDLE watch (EEXIST)",
+	      rc == -1 && errno == EEXIST);
+	if (rc == 0)
+		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+
+	CHECK_ERR(
+	    "active-handoff: checkout for cleanup",
+	    braid_pool_checkout(pool, 0, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
+	if (rec.call_count >= 2)
+		braid_pool_checkin(pool, rec.fd[1], BRAID_CONN_DISCARD);
+
 	close(peer_fd);
 	braid_pool_destroy(pool, 0);
 	close(epfd);
@@ -960,7 +1097,7 @@ reentrant_checkout_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
 	braid_test_clock_ms = 1001;
 	tok = 0;
 	braid_pool_checkout(ctx->pool, 5000, recording_checkout_cb,
-			   ctx->second_rec, &tok);
+			    ctx->second_rec, &tok);
 
 	/*
 	 * Checkin while in_callback > 0: BRAID_DEFERRED_SERVE_WAITQUEUE is set.
@@ -1005,17 +1142,18 @@ test_checkin_from_callback(void)
 
 	/*
 	 * Checkout the IDLE connection immediately. The reentrant_checkout_cb
-	 * will enqueue a second waiter and then checkin from within the callback.
+	 * will enqueue a second waiter and then checkin from within the
+	 * callback.
 	 */
 	braid_test_clock_ms = 1000;
 	ctx.pool = pool;
 	ctx.fd = -1;
 	ctx.second_rec = &second_rec;
 
-	CHECK_ERR("reentrant: checkout IDLE",
-		  braid_pool_checkout(pool, 0, reentrant_checkout_cb, &ctx,
-				      NULL),
-		  BRAID_OK);
+	CHECK_ERR(
+	    "reentrant: checkout IDLE",
+	    braid_pool_checkout(pool, 0, reentrant_checkout_cb, &ctx, NULL),
+	    BRAID_OK);
 
 	/*
 	 * After checkout returns, the deferred work should have been drained:
@@ -1309,19 +1447,19 @@ test_validate_fn_called_above_threshold(void)
 	braid_pool_checkin(pool, rec.fd[0], BRAID_CONN_OK);
 
 	/*
-	 * After CONN_OK checkin the conn is IDLE again with last_active_ms=5999.
-	 * Override it back to 1000 so that at time 6001 the threshold is crossed:
-	 * 6001 >= 1000 + 5000 = 6001.
+	 * After CONN_OK checkin the conn is IDLE again with
+	 * last_active_ms=5999. Override it back to 1000 so that at time 6001
+	 * the threshold is crossed: 6001 >= 1000 + 5000 = 6001.
 	 */
 	conn->last_active_ms = 1000;
 
 	/* Checkout above threshold: now=6001 >= 1000+5000=6001. */
 	memset(&rec, 0, sizeof(rec));
 	braid_test_clock_ms = 6001;
-	CHECK_ERR("validate-threshold: checkout above threshold",
-		  braid_pool_checkout(pool, 0, recording_checkout_cb, &rec,
-				      NULL),
-		  BRAID_OK);
+	CHECK_ERR(
+	    "validate-threshold: checkout above threshold",
+	    braid_pool_checkout(pool, 0, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
 	CHECK("validate-threshold: called above threshold",
 	      g_validate_calls >= 1);
 	CHECK("validate-threshold: checkout still fired (validate returned OK)",
@@ -1465,6 +1603,109 @@ test_init_fn_deadline_exceeded(void)
 	close(epfd);
 }
 
+/*
+ * init_timeout overrun enforcement: init_fn returning BRAID_OK after the
+ * deadline must still be treated as INITIALIZING failure.
+ */
+static void
+test_init_fn_elapsed_deadline_enforced(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	int err = 0;
+	int epfd, peer_fd;
+
+	reset_counters();
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("init-elapsed: epoll_create1", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	cfg.init_fn = recording_init_cb;
+	cfg.init_timeout = 100;
+	cfg.destroy_fn = recording_destroy_cb;
+	g_init_return = BRAID_OK;
+	g_init_advance_ms = 1000; /* force deadline overrun inside init_fn */
+
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("init-elapsed: create", 0);
+		close(epfd);
+		return;
+	}
+
+	braid_test_clock_ms = 1000;
+	conn = alloc_connecting_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("init-elapsed: alloc_connecting_conn", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+
+	CHECK_ERR("init-elapsed: notify returns OK",
+		  braid_pool_notify(pool, conn->fd, BRAID_IO_WRITE), BRAID_OK);
+	CHECK("init-elapsed: init_fn called once", g_init_calls == 1);
+	CHECK("init-elapsed: conn discarded on deadline overrun",
+	      pool->live_count == 0);
+
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+/*
+ * io_modify failure in CONNECTING completion path must discard the
+ * connection rather than leaving a live slot without event registration.
+ */
+static void
+test_notify_io_modify_failure_discards_connection(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	int err = 0;
+	int epfd, peer_fd;
+	int fd;
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("notify-modfail: epoll_create1", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("notify-modfail: create", 0);
+		close(epfd);
+		return;
+	}
+
+	conn = alloc_connecting_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("notify-modfail: alloc_connecting_conn", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+	fd = conn->fd;
+
+	close(epfd);
+	epfd = -1;
+
+	CHECK_ERR("notify-modfail: notify returns OK",
+		  braid_pool_notify(pool, fd, BRAID_IO_WRITE), BRAID_OK);
+	CHECK("notify-modfail: connection discarded on io_modify failure",
+	      pool->live_count == 0);
+
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+}
+
 /* ── test suite entry point ──────────────────────────────────────────── */
 
 void
@@ -1476,9 +1717,11 @@ run_pool_tests(void)
 	test_pool_create_valid();
 	test_pool_create_null_event_fd();
 	test_pool_create_min_gt_max();
+	test_api_null_argument_guards();
 	test_pool_destroy_no_active();
 	test_pool_destroy_with_active();
 	test_checkout_immediate();
+	test_active_event_registration_handoff();
 	test_checkout_enqueues();
 	test_checkin_conn_ok();
 	test_checkin_conn_discard();
@@ -1495,4 +1738,6 @@ run_pool_tests(void)
 	test_connect_timeout_aborts_connecting();
 	test_shutdown_suppresses_reconnect();
 	test_init_fn_deadline_exceeded();
+	test_init_fn_elapsed_deadline_enforced();
+	test_notify_io_modify_failure_discards_connection();
 }
