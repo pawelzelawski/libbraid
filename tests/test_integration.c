@@ -135,6 +135,31 @@ reconnect_force_socket_create_fail(braid_pool_t *pool, struct addrinfo *ai,
 }
 
 static int
+wait_fd_ready(int fd, int want_write, int timeout_ms)
+{
+	fd_set fds;
+	struct timeval tv;
+	int rc;
+
+	for (;;) {
+		FD_ZERO(&fds);
+		FD_SET(fd, &fds);
+		tv.tv_sec = timeout_ms / 1000;
+		tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+		rc = select(fd + 1, want_write ? NULL : &fds,
+			    want_write ? &fds : NULL, NULL, &tv);
+		if (rc > 0)
+			return BRAID_OK;
+		if (rc == 0)
+			return BRAID_ERR_TIMEOUT;
+		if (errno == EINTR)
+			continue;
+		return BRAID_ERR_SYSCALL;
+	}
+}
+
+static int
 send_exact_retry(int fd, const void *buf, size_t n, int max_spins)
 {
 	const uint8_t *p = buf;
@@ -156,7 +181,14 @@ send_exact_retry(int fd, const void *buf, size_t n, int max_spins)
 		if (w == 0)
 			break;
 		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-			spins++;
+			if (spins++ >= max_spins)
+				return BRAID_ERR_TIMEOUT;
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				int ready = wait_fd_ready(fd, 1, 1);
+
+				if (ready == BRAID_ERR_SYSCALL)
+					return BRAID_ERR_SYSCALL;
+			}
 			continue;
 		}
 		return BRAID_ERR_SYSCALL;
@@ -182,7 +214,14 @@ recv_exact_retry(int fd, void *buf, size_t n, int max_spins)
 		if (r == 0)
 			break;
 		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-			spins++;
+			if (spins++ >= max_spins)
+				return BRAID_ERR_TIMEOUT;
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				int ready = wait_fd_ready(fd, 0, 1);
+
+				if (ready == BRAID_ERR_SYSCALL)
+					return BRAID_ERR_SYSCALL;
+			}
 			continue;
 		}
 		return BRAID_ERR_SYSCALL;

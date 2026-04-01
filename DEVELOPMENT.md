@@ -4,7 +4,7 @@
 
 **Last Updated**: 2026-04-01
 **Current Phase**: Phase 8 in progress
-**Next Task**: Phase 8.2 — Benchmark suite
+**Next Task**: Phase 8.3 — Final quality pass
 
 ### Phase Summary
 
@@ -17,7 +17,7 @@
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE | ✓ | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | COMPLETE | ✓ | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | COMPLETE | ✓ | kqueue translation unit, all tests on OpenBSD |
-| 8 | Hardening, Benchmarks, and Release | IN PROGRESS | ✓ | Integration tests complete; benchmarks and README pending |
+| 8 | Hardening, Benchmarks, and Release | IN PROGRESS | ✓ | Integration and benchmarks complete; README and final quality pass pending (Linux ARM64 CI regression under investigation) |
 
 ### Quality Milestones
 
@@ -789,12 +789,16 @@ README.md complete. Library is ready for a v0.1.0 release tag.
 
 Result: Linux 522/522 and OpenBSD 524/524 passed.
 
-**8.2 — Benchmark suite**
-- Implement all benchmarks in `bench/` per REPOSITORY_STRUCTURE.md §5:
+**8.2 — Benchmark suite** ✓ DONE
+- [x] Implement all benchmarks in `bench/` per REPOSITORY_STRUCTURE.md §5:
   `bench_checkout.c`, `bench_advance.c`, `bench_reconnect.c`,
   `bench_pool_scale.c`
-- Run on Linux x86_64 and ARM64; record baselines with full hardware
-  context per TESTING.md §7.2
+- [x] Record baselines with full hardware context per TESTING.md §7.2
+  on available platforms (Linux x86_64 on two hosts, OpenBSD x86_64)
+
+Result: Baselines captured on Linux x86_64 (Intel i7-7500U, Ryzen 7 4800H)
+and OpenBSD x86_64 (Intel i5-4278U). Linux ARM64 baseline pending available
+hardware.
 
 **8.3 — Final quality pass**
 - `make lint` → zero clang-tidy and cppcheck warnings on all platforms
@@ -818,7 +822,7 @@ Result: Linux 522/522 and OpenBSD 524/524 passed.
 - [x] Integration test suite passes on Linux — M16 confirmed
 - [x] Integration test suite passes on OpenBSD — M17 confirmed
 - [ ] Benchmark baselines recorded on Linux x86_64 and ARM64,
-      OpenBSD x86_64
+      OpenBSD x86_64 (x86_64 done; ARM64 hardware still pending)
 - [ ] `make lint` zero warnings — M8, M9 confirmed
 - [ ] All tests pass on all platforms — M2, M3 confirmed
 - [ ] Valgrind clean — M4 confirmed
