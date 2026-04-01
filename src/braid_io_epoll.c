@@ -17,33 +17,69 @@
 #include "../include/braid.h"
 #include "braid_internal.h"
 #include "braid_io.h"
+#include "braid_table.h"
 
 /*
- * Stubs — full implementation in Phase 6.
+ * events_to_epoll — translate BRAID_IO_* bitmask to epoll event flags.
+ * Always includes EPOLLET (edge-triggered). See ARCHITECTURE.md §8.1.
  */
+static uint32_t
+events_to_epoll(uint32_t events)
+{
+	uint32_t epev = EPOLLET;
+
+	if (events & BRAID_IO_READ)
+		epev |= EPOLLIN;
+	if (events & BRAID_IO_WRITE)
+		epev |= EPOLLOUT;
+	return epev;
+}
 
 int
 io_watch(braid_pool_t *pool, int fd, uint32_t events)
 {
-	(void)pool;
-	(void)fd;
-	(void)events;
+	braid_conn_t *conn;
+	struct epoll_event ev;
+
+	if (table_lookup(pool, fd, &conn) != BRAID_OK) {
+		BRAID_DEBUG_ASSERT(0, "io_watch: fd not in connection table");
+		return BRAID_ERR_INVAL;
+	}
+
+	ev.events = events_to_epoll(events);
+	ev.data.ptr = &conn->tag;
+
+	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
+		return BRAID_ERR_SYSCALL;
+
 	return BRAID_OK;
 }
 
 int
 io_modify(braid_pool_t *pool, int fd, uint32_t events)
 {
-	(void)pool;
-	(void)fd;
-	(void)events;
+	braid_conn_t *conn;
+	struct epoll_event ev;
+
+	if (table_lookup(pool, fd, &conn) != BRAID_OK) {
+		BRAID_DEBUG_ASSERT(0, "io_modify: fd not in connection table");
+		return BRAID_ERR_INVAL;
+	}
+
+	ev.events = events_to_epoll(events);
+	ev.data.ptr = &conn->tag;
+
+	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_MOD, fd, &ev) != 0)
+		return BRAID_ERR_SYSCALL;
+
 	return BRAID_OK;
 }
 
 int
 io_unwatch(braid_pool_t *pool, int fd)
 {
-	(void)pool;
-	(void)fd;
+	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_DEL, fd, NULL) != 0)
+		return BRAID_ERR_SYSCALL;
+
 	return BRAID_OK;
 }

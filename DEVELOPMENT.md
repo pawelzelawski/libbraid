@@ -571,7 +571,7 @@ tests pass.
 
 ### Tasks
 
-**6.1 — `braid_pool_t` struct definition**
+**6.1 — `braid_pool_t` struct definition** ✓ DONE
 - Define `braid_pool_t` in `src/braid_internal.h`: config copy, connection
   table, reconnection heap, idle reaper heap, wait queue ring, live
   connection count, shutdown flag, `in_callback`, `deferred_work`
