@@ -35,3 +35,32 @@ jobs:
 
       - name: Test (Valgrind)
         run: make valgrind
+
+  build-and-test-openbsd-amd64:
+    name: OpenBSD amd64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and test in OpenBSD
+        uses: vmactions/openbsd-vm@v1.3.8
+        with:
+          usesh: true
+          run: |
+            make dev
+
+  build-and-test-openbsd-arm64:
+    name: OpenBSD arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and test in OpenBSD
+        uses: vmactions/openbsd-vm@v1.3.8
+        with:
+          usesh: true
+          arch: aarch64
+          run: |
+            make dev
