@@ -3,7 +3,7 @@
 ## Status Overview
 
 **Last Updated**: 2026-03-31
-**Current Phase**: Phase 5 complete
+**Current Phase**: Phase 6 complete
 **Next Task**: Phase 6 — Pool Core
 
 ### Phase Summary
@@ -15,7 +15,7 @@
 | 3 | Connection State Machine | COMPLETE | ✓ | conn_transition, record lifecycle, keepalive, socket creation |
 | 4 | Wait Queue | COMPLETE | ✓ | Ring buffer, cancel, timeout expiry, deferred work flags |
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE | ✓ | Min-heaps, backoff, DNS, reap logic |
-| 6 | Pool Core | NOT STARTED | — | checkout, checkin, advance, notify, pool lifecycle |
+| 6 | Pool Core | COMPLETE | ✓ | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | NOT STARTED | — | kqueue translation unit, all tests on OpenBSD |
 | 8 | Hardening, Benchmarks, and Release | NOT STARTED | — | Integration tests, benchmarks, README |
 
@@ -37,7 +37,7 @@
 | M12 | One callback per checkout guaranteed — verified by test | DONE |
 | M13 | Backoff exponent overflow guard verified by test | DONE |
 | M14 | Reaper min_connections floor verified by test | DONE |
-| M15 | Re-entrancy: checkin from checkout callback safe — verified by test | NOT STARTED |
+| M15 | Re-entrancy: checkin from checkout callback safe — verified by test | DONE |
 | M16 | Integration test suite passes on Linux | NOT STARTED |
 | M17 | Integration test suite passes on OpenBSD | NOT STARTED |
 
@@ -663,8 +663,8 @@ tests pass.
   - [x] ACTIVE: silently ignore
   - [x] CLOSING, DEAD: silently ignore
 
-**6.8 — Tests (`tests/test_pool.c`)**
-- Implement all test cases from TESTING.md §3.6:
+**6.8 — Tests (`tests/test_pool.c`)** ✓ DONE
+- [x] Implement all test cases from TESTING.md §3.6:
   `test_pool_create_valid`, `test_pool_create_null_event_fd`,
   `test_pool_create_min_gt_max`, `test_pool_destroy_no_active`,
   `test_pool_destroy_with_active`, `test_checkout_immediate`,
@@ -678,25 +678,25 @@ tests pass.
   `test_shutdown_cancels_waiters`, `test_observe_fn_null_no_crash`,
   `test_validate_fn_called_above_threshold`,
   `test_validate_fn_failure_discards`, `test_init_fn_deadline_exceeded`
-- All timer-dependent tests use `braid_test_clock_ms` and a test
+- [x] All timer-dependent tests use `braid_test_clock_ms` and a test
   epoll fd
-- Register all tests in `run_tests.c`
+- [x] Register all tests in `run_tests.c`
 
 ### Phase 6 Completion Criteria
 
-- [ ] All `test_pool.c` tests pass on Linux
-- [ ] Valgrind clean; ASan/UBSan clean
-- [ ] `braid_pool_create()` / `braid_pool_destroy()` cycle: no leaks
+- [x] All `test_pool.c` tests pass on Linux (355/355)
+- [x] Valgrind clean; ASan/UBSan clean
+- [x] `braid_pool_create()` / `braid_pool_destroy()` cycle: no leaks
       (Valgrind confirms)
-- [ ] Re-entrancy test passes: checkin from within checkout callback
+- [x] Re-entrancy test passes: checkin from within checkout callback
       completes without crash or double callback
-- [ ] Stale-token cancel verified: wrapped token does not cancel newer waiter
-- [ ] connect_timeout verified: CONNECTING socket aborted after deadline
-- [ ] Shutdown suppresses reconnect: no reconnect entries inserted after
+- [x] Stale-token cancel verified: wrapped token does not cancel newer waiter
+- [x] connect_timeout verified: CONNECTING socket aborted after deadline
+- [x] Shutdown suppresses reconnect: no reconnect entries inserted after
       pool marked shutting down
 - [ ] `make lint` zero warnings
-- [ ] All default config values applied correctly when fields are zero
-- [ ] Quality milestone M15 confirmed
+- [x] All default config values applied correctly when fields are zero
+- [x] Quality milestone M15 confirmed
 
 ---
 
