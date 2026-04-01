@@ -647,21 +647,21 @@ tests pass.
   `waitq_serve_head()`). Internal function — no `braid_` prefix.
   See ARCHITECTURE.md §9.2.
 
-**6.7 — `braid_pool_notify()`**
-- Implement `braid_pool_notify(pool, fd, events)` per
+**6.7 — `braid_pool_notify()`** ✓ DONE
+- [x] Implement `braid_pool_notify(pool, fd, events)` per
   ARCHITECTURE.md §12:
-  - `table_lookup(fd)` — silently return if not found (timing artefact)
-  - CONNECTING + writable: `getsockopt(SO_ERROR)`; if error:
+  - [x] `table_lookup(fd)` — silently return if not found (timing artefact)
+  - [x] CONNECTING + writable: `getsockopt(SO_ERROR)`; if error:
     `conn_transition(→ DEAD)`; else: `conn_transition(→ INITIALIZING)`;
     call `init_fn` with `in_callback` protocol and deadline; on success
     `conn_transition(→ IDLE)`; on failure `conn_transition(→ DEAD)`;
     `io_modify()` from write to read
-  - IDLE + readable: call `recv(fd, &probe_byte, 1, MSG_PEEK)`.
+  - [x] IDLE + readable: call `recv(fd, &probe_byte, 1, MSG_PEEK)`.
     If returns -1 with EAGAIN: spurious wakeup, no action.
     If returns 0, 1, or -1 with any other error: half-open or unclean
     connection, `conn_transition(→ CLOSING)`. See ARCHITECTURE.md §12.
-  - ACTIVE: silently ignore
-  - CLOSING, DEAD: silently ignore
+  - [x] ACTIVE: silently ignore
+  - [x] CLOSING, DEAD: silently ignore
 
 **6.8 — Tests (`tests/test_pool.c`)**
 - Implement all test cases from TESTING.md §3.6:

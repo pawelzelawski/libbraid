@@ -8,10 +8,12 @@
  * See ARCHITECTURE.md §11, §12, §13.
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -739,6 +741,108 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
                                        ? UINT32_MAX
                                        : (uint32_t)delta;
                 }
+        }
+
+        return BRAID_OK;
+}
+
+/* -- braid_pool_notify --------------------------------------------------- */
+
+/*
+ * braid_pool_notify -- dispatch an epoll/kqueue event for a libbraid fd.
+ *
+ * Called by the event loop when epoll_wait() returns an event for a fd
+ * tagged with BRAID_FD_MAGIC.  Dispatches by connection state:
+ *
+ *   CONNECTING + writable: connect() complete or failed.  getsockopt()
+ *     checks SO_ERROR.  On error: DEAD.  On success: INITIALIZING,
+ *     run init_fn if present (in_callback protocol, deadline from
+ *     init_timeout), then IDLE.  io_modify(READ) on success path.
+ *
+ *   IDLE + readable: probe for half-open via recv(MSG_PEEK).
+ *     EAGAIN/EWOULDBLOCK: spurious wakeup, no action.
+ *     Any other result: CLOSING (chains to DEAD via conn_transition).
+ *
+ *   ACTIVE, INITIALIZING, CLOSING, DEAD: silently ignored.
+ *
+ * Always returns BRAID_OK, including for unrecognised fds (timing artefact).
+ * See ARCHITECTURE.md s12, DEVELOPMENT.md s6.7.
+ */
+int
+braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
+{
+        braid_conn_t *conn;
+
+        (void)events; /* dispatch by state, not event bits */
+
+        if (table_lookup(pool, fd, &conn) != BRAID_OK)
+                return BRAID_OK;
+
+        switch (conn->state) {
+        case BRAID_STATE_CONNECTING: {
+                int so_error = 0;
+                socklen_t errlen = sizeof(so_error);
+
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error,
+                               &errlen) != 0 ||
+                    so_error != 0) {
+                        conn_transition(pool, conn, BRAID_STATE_DEAD);
+                        break;
+                }
+
+                conn_transition(pool, conn, BRAID_STATE_INITIALIZING);
+
+                if (pool->config.init_fn != NULL) {
+                        uint64_t timeout_ms;
+                        uint64_t deadline_ms;
+                        int init_rc;
+
+                        timeout_ms = pool->config.init_timeout != 0
+                                         ? (uint64_t)pool->config.init_timeout
+                                         : 10000;
+                        deadline_ms = braid_now_ms() + timeout_ms;
+                        pool->in_callback++;
+                        init_rc = pool->config.init_fn(
+                            fd, &conn->conn_ctx,
+                            pool->config.hook_context, deadline_ms);
+                        pool->in_callback--;
+                        if (pool->in_callback == 0 &&
+                            pool->deferred_work != 0)
+                                pool_drain_deferred(pool);
+
+                        if (init_rc != BRAID_OK) {
+                                conn_transition(pool, conn,
+                                                BRAID_STATE_DEAD);
+                                break;
+                        }
+                }
+
+                conn_transition(pool, conn, BRAID_STATE_IDLE);
+                io_modify(pool, fd, BRAID_IO_READ);
+                break;
+        }
+
+        case BRAID_STATE_IDLE: {
+                char probe;
+                ssize_t n;
+
+                n = recv(fd, &probe, 1, MSG_PEEK);
+                if (n == -1 &&
+                    (errno == EAGAIN || errno == EWOULDBLOCK))
+                        break; /* spurious wakeup */
+
+                /* EOF (0), data (1), or error (-1 with other errno):
+                 * connection is no longer clean.  CLOSING chains to DEAD
+                 * via conn_transition when in_callback == 0. */
+                conn_transition(pool, conn, BRAID_STATE_CLOSING);
+                break;
+        }
+
+        case BRAID_STATE_ACTIVE:
+        case BRAID_STATE_INITIALIZING:
+        case BRAID_STATE_CLOSING:
+        case BRAID_STATE_DEAD:
+                break;
         }
 
         return BRAID_OK;
