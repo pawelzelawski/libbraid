@@ -2,14 +2,15 @@
  * braid_io_kqueue.c — kqueue implementation of the I/O abstraction layer
  *
  * io_watch(): kevent(EVFILT_READ or EVFILT_WRITE, EV_ADD).
- * io_modify(): delete old filter, add new filter.
- * io_unwatch(): kevent(EV_DELETE) for all active filters on fd.
+ * io_modify(): delete old filter(s), add new filter(s).
+ * io_unwatch(): EV_DELETE for all active filters on fd.
  *
  * udata is set to &conn->tag (inline braid_fd_tag_t struct).
  * Compiled on OpenBSD, FreeBSD, and NetBSD only — excluded from Linux build.
  * See ARCHITECTURE.md §8.1, §15.3.
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <sys/event.h>
 #include <unistd.h>
@@ -17,3 +18,99 @@
 #include "../include/braid.h"
 #include "braid_internal.h"
 #include "braid_io.h"
+#include "braid_table.h"
+
+/*
+ * kq_apply — submit a changelist of kevents to the caller's kqueue fd.
+ * Returns BRAID_OK on success, BRAID_ERR_SYSCALL on hard failure.
+ * ENOENT on EV_DELETE is tolerated — the filter was not registered.
+ */
+static int
+kq_apply(int kqfd, struct kevent *changes, int nchanges)
+{
+	int ret;
+
+	ret = kevent(kqfd, changes, nchanges, NULL, 0, NULL);
+	if (ret == -1) {
+		if (errno == ENOENT)
+			return BRAID_OK;
+		return BRAID_ERR_SYSCALL;
+	}
+	return BRAID_OK;
+}
+
+int
+io_watch(braid_pool_t *pool, int fd, uint32_t events)
+{
+	braid_conn_t *conn;
+	struct kevent changes[2];
+	int n = 0;
+
+	if (table_lookup(pool, fd, &conn) != BRAID_OK) {
+		BRAID_DEBUG_ASSERT(0, "io_watch: fd not in connection table");
+		return BRAID_ERR_INVAL;
+	}
+
+	if (events & BRAID_IO_READ)
+		EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD, 0, 0,
+		       &conn->tag);
+	if (events & BRAID_IO_WRITE)
+		EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD, 0, 0,
+		       &conn->tag);
+
+	if (n == 0)
+		return BRAID_OK;
+
+	return kq_apply(pool->config.event_fd, changes, n);
+}
+
+int
+io_modify(braid_pool_t *pool, int fd, uint32_t events)
+{
+	braid_conn_t *conn;
+	struct kevent changes[4];
+	int n = 0;
+
+	if (table_lookup(pool, fd, &conn) != BRAID_OK) {
+		BRAID_DEBUG_ASSERT(0, "io_modify: fd not in connection table");
+		return BRAID_ERR_INVAL;
+	}
+
+	/*
+	 * kqueue has no EPOLL_CTL_MOD equivalent — delete existing filters
+	 * then add the new ones. Delete both unconditionally; ENOENT is
+	 * tolerated by kq_apply if the filter was not registered.
+	 * SAFETY: EV_DELETE kevents do not dereference udata; pass NULL.
+	 */
+	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0,
+	       NULL);
+	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0,
+	       NULL);
+	if (events & BRAID_IO_READ)
+		EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD, 0, 0,
+		       &conn->tag);
+	if (events & BRAID_IO_WRITE)
+		EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD, 0, 0,
+		       &conn->tag);
+
+	/*
+	 * Submit deletes first as a batch; if kevent() returns -1 for a
+	 * reason other than ENOENT, propagate the error before attempting
+	 * the adds.
+	 */
+	return kq_apply(pool->config.event_fd, changes, n);
+}
+
+int
+io_unwatch(braid_pool_t *pool, int fd)
+{
+	struct kevent changes[2];
+	int n = 0;
+
+	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0,
+	       NULL);
+	EV_SET(&changes[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0,
+	       NULL);
+
+	return kq_apply(pool->config.event_fd, changes, n);
+}

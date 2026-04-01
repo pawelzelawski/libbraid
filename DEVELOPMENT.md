@@ -715,15 +715,15 @@ outside `src/braid_io_epoll.c`.
 
 ### Tasks
 
-**7.1 — kqueue translation unit (`src/braid_io_kqueue.c`)**
-- Implement `io_watch(pool, fd, events)`: `kevent(EVFILT_READ, EV_ADD)`
+**7.1 — kqueue translation unit (`src/braid_io_kqueue.c`)** ✓ DONE
+- [x] Implement `io_watch(pool, fd, events)`: `kevent(EVFILT_READ, EV_ADD)`
   or `kevent(EVFILT_WRITE, EV_ADD)` per `events` bitmask; set
   `udata = &conn->tag`. See ARCHITECTURE.md §15.3.
-- Implement `io_modify(pool, fd, events)`: delete old filter(s) via
+- [x] Implement `io_modify(pool, fd, events)`: delete old filter(s) via
   `EV_DELETE`; add new filter(s)
-- Implement `io_unwatch(pool, fd)`: `EV_DELETE` for all active filters
+- [x] Implement `io_unwatch(pool, fd)`: `EV_DELETE` for all active filters
   on fd
-- The caller's kqueue fd is passed via `config.event_fd` — the same
+- [x] The caller's kqueue fd is passed via `config.event_fd` — the same
   field used for the epoll fd on Linux. The field name is platform-neutral
   from Phase 1 onward.
 
