@@ -4,7 +4,7 @@
 
 **Last Updated**: 2026-04-02
 **Current Phase**: Phase 8 in progress
-**Next Task**: Phase 8.4 — README.md
+**Next Task**: Phase 8 COMPLETE — apply v1.0.0 release tag
 
 ### Phase Summary
 
@@ -17,7 +17,7 @@
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE | ✓ | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | COMPLETE | ✓ | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | COMPLETE | ✓ | kqueue translation unit, all tests on OpenBSD |
-| 8 | Hardening, Benchmarks, and Release | IN PROGRESS | ✓ | Integration and benchmarks complete; README and final quality pass pending |
+| 8 | Hardening, Benchmarks, and Release | COMPLETE | ✓ | All milestones confirmed; README complete; v1.0.0 ready |
 
 ### Quality Milestones
 
@@ -814,14 +814,19 @@ Result: 522/522 tests passed under ASan/UBSan and TSan. Valgrind ERROR SUMMARY: 
 clang-format produced no diff. clang-tidy exit 0 (all warnings from non-user headers, suppressed).
 M7, M8, M9 confirmed.
 
-**8.4 — README.md**
+**8.4 — README.md** ✓ DONE
 - Written for an embedder coming to the project cold
 - Contents: one-paragraph description, requirements (libc only),
   how to build (`make && make install`), minimal integration example
   (pool create, advance loop, checkout/checkin pattern), known
   limitations (synchronous DNS in advance, cooperative caller-owns-loop,
   one-connection-per-checkout not suited for HTTP/2 upstream),
-  link to ARCHITECTURE.md for full design
+  link to ARCHITECTURE.md for full design, ISC license link
+
+Result: README.md written; integration example compiles and links clean with
+zero warnings under -Wall -Wextra -Wpedantic. braid_fd_tag_t and
+BRAID_FD_MAGIC moved from braid_internal.h to the public braid.h so that
+embedders can perform the tag-based event dispatch without internal headers.
 
 ### Phase 8 Completion Criteria
 
@@ -836,7 +841,7 @@ M7, M8, M9 confirmed.
 - [x] ASan/UBSan clean on both platforms — M5, M6 confirmed
 - [x] TSan clean on Linux — M7 confirmed
 - [x] All quality milestone status cells updated to DONE
-- [ ] README.md complete and integration example compiles and runs
+- [x] README.md complete and integration example compiles and runs
 - [ ] v1.0.0 release tag applied
 
 ---

@@ -87,8 +87,7 @@ typedef enum {
  * Internal constants.
  */
 
-/* Magic value for braid_fd_tag_t — used to authenticate epoll events. */
-#define BRAID_FD_MAGIC 0xBAADB011u
+/* braid_fd_tag_t and BRAID_FD_MAGIC are defined in include/braid.h. */
 
 /* Connection record flag bits. */
 #define CONN_FLAG_TOMBSTONE 0x01u /* slot vacated, probe chain intact */
@@ -106,18 +105,6 @@ typedef enum {
 /* Deferred work flags — set when work is deferred due to in_callback > 0. */
 #define BRAID_DEFERRED_SERVE_WAITQUEUE 0x01u
 #define BRAID_DEFERRED_PROCESS_DEAD 0x02u
-
-/*
- * braid_fd_tag_t — epoll/kqueue sentinel struct.
- * Embedded inline in braid_conn_t; never separately allocated.
- * epoll_data.ptr (or kevent udata) points to &conn->tag.
- * The magic value authenticates the pointer as libbraid-owned.
- * See ARCHITECTURE.md §8.2.
- */
-typedef struct braid_fd_tag {
-	uint32_t magic; /* BRAID_FD_MAGIC; zeroed on DEAD to invalidate */
-	int fd;
-} braid_fd_tag_t;
 
 /*
  * braid_conn_t — connection record.

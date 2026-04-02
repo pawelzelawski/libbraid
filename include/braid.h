@@ -143,8 +143,18 @@ struct braid_config {
 };
 
 /*
- * Public API function declarations.
+ * braid_fd_tag_t — epoll/kqueue event dispatch sentinel.
+ * Cast epoll_data.ptr / kevent udata to this type; check magic ==
+ * BRAID_FD_MAGIC, then call braid_pool_notify() with tag->fd. See
+ * ARCHITECTURE.md §8.2.
  */
+
+#define BRAID_FD_MAGIC 0xBAADB011u
+
+typedef struct braid_fd_tag {
+	uint32_t magic; /* BRAID_FD_MAGIC; zeroed when connection is closed */
+	int fd;
+} braid_fd_tag_t;
 
 /*
  * braid_pool_create — allocate and initialise a connection pool.
