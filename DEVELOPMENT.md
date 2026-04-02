@@ -4,7 +4,7 @@
 
 **Last Updated**: 2026-04-02
 **Current Phase**: Phase 8 in progress
-**Next Task**: Phase 8.3 — Final quality pass
+**Next Task**: Phase 8.4 — README.md
 
 ### Phase Summary
 
@@ -29,9 +29,9 @@
 | M4 | Valgrind clean on Linux | DONE |
 | M5 | ASan/UBSan clean on Linux | DONE |
 | M6 | ASan/UBSan clean on OpenBSD | N/A — OpenBSD clang has no sanitizer runtime; 386/386 tests pass clean |
-| M7 | TSan clean on Linux | NOT STARTED |
-| M8 | clang-format clean | NOT STARTED |
-| M9 | clang-tidy zero warnings | NOT STARTED |
+| M7 | TSan clean on Linux | DONE |
+| M8 | clang-format clean | DONE |
+| M9 | clang-tidy zero warnings | DONE |
 | M10 | Hash table lookup correct under collision — verified by test | DONE |
 | M11 | State machine rejects all illegal transitions — verified by test | DONE |
 | M12 | One callback per checkout guaranteed — verified by test | DONE |
@@ -760,7 +760,7 @@ epoll assertions correctly skipped). All 4 CI jobs green.
 - [x] No `#ifdef` for platform differences outside `src/braid_io_epoll.c`
       and `src/braid_io_kqueue.c` (entropy shim and test-only guards accepted)
 - [x] Quality milestones M3 and M6 confirmed
-- [ ] Quality milestone M17 confirmed (Phase 8 — integration tests)
+- [x] Quality milestone M17 confirmed (Phase 8 — integration tests)
 
 ---
 
@@ -802,13 +802,17 @@ available. Build quality and correctness are verified on all platforms via CI
 (Linux x86_64, Linux ARM64, OpenBSD x86_64), but benchmark coverage is
 Linux x86_64 only.
 
-**8.3 — Final quality pass**
+**8.3 — Final quality pass** ✓ DONE
 - `make lint` → zero clang-tidy and cppcheck warnings on all platforms
 - `make test` → all tests pass on Linux and OpenBSD
 - `make valgrind` → clean on Linux
 - Full ASan/UBSan run on both platforms
 - Full TSan run on Linux
 - All quality milestone status cells updated to DONE
+
+Result: 522/522 tests passed under ASan/UBSan and TSan. Valgrind ERROR SUMMARY: 0.
+clang-format produced no diff. clang-tidy exit 0 (all warnings from non-user headers, suppressed).
+M7, M8, M9 confirmed.
 
 **8.4 — README.md**
 - Written for an embedder coming to the project cold
@@ -826,12 +830,12 @@ Linux x86_64 only.
 - [x] Benchmark baselines recorded on Linux x86_64 (two hosts). ARM64 and
       OpenBSD benchmarks not conducted — no dedicated hardware available;
       build and test quality verified on those platforms via CI.
-- [ ] `make lint` zero warnings — M8, M9 confirmed
-- [ ] All tests pass on all platforms — M2, M3 confirmed
-- [ ] Valgrind clean — M4 confirmed
-- [ ] ASan/UBSan clean on both platforms — M5, M6 confirmed
-- [ ] TSan clean on Linux — M7 confirmed
-- [ ] All quality milestone status cells updated to DONE
+- [x] `make lint` zero warnings — M8, M9 confirmed
+- [x] All tests pass on all platforms — M2, M3 confirmed
+- [x] Valgrind clean — M4 confirmed
+- [x] ASan/UBSan clean on both platforms — M5, M6 confirmed
+- [x] TSan clean on Linux — M7 confirmed
+- [x] All quality milestone status cells updated to DONE
 - [ ] README.md complete and integration example compiles and runs
 - [ ] v1.0.0 release tag applied
 
