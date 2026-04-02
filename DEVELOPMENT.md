@@ -2,7 +2,7 @@
 
 ## Status Overview
 
-**Last Updated**: 2026-04-01
+**Last Updated**: 2026-04-02
 **Current Phase**: Phase 8 in progress
 **Next Task**: Phase 8.3 — Final quality pass
 
@@ -17,7 +17,7 @@
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE | ✓ | Min-heaps, backoff, DNS, reap logic |
 | 6 | Pool Core | COMPLETE | ✓ | checkout, checkin, advance, notify, pool lifecycle |
 | 7 | OpenBSD (kqueue) Port | COMPLETE | ✓ | kqueue translation unit, all tests on OpenBSD |
-| 8 | Hardening, Benchmarks, and Release | IN PROGRESS | ✓ | Integration and benchmarks complete; README and final quality pass pending (Linux ARM64 CI regression under investigation) |
+| 8 | Hardening, Benchmarks, and Release | IN PROGRESS | ✓ | Integration and benchmarks complete; README and final quality pass pending |
 
 ### Quality Milestones
 
@@ -152,7 +152,7 @@ Code compiles clean with zero warnings.
 - [x] `make valgrind` exits clean on Linux ARM64 (via GitHub Actions `ubuntu-24.04-arm`;
       local Manjaro ARM skipped — Manjaro ARM is unmaintained, ships stripped
       `ld-linux-aarch64.so.1` which Valgrind requires unstripped)
-- [ ] `make lint` produces zero warnings on all C stubs
+- [x] `make lint` produces zero warnings on all C stubs
 - [x] Mock clock (`braid_now_ms`) compiles correctly under both
       `BRAID_TEST_CLOCK` and production builds
 - [x] Quality milestone M1 confirmed (x86_64)
@@ -794,11 +794,13 @@ Result: Linux 522/522 and OpenBSD 524/524 passed.
   `bench_checkout.c`, `bench_advance.c`, `bench_reconnect.c`,
   `bench_pool_scale.c`
 - [x] Record baselines with full hardware context per TESTING.md §7.2
-  on available platforms (Linux x86_64 on two hosts, OpenBSD x86_64)
+  on available platforms (Linux x86_64 on two hosts)
 
-Result: Baselines captured on Linux x86_64 (Intel i7-7500U, Ryzen 7 4800H)
-and OpenBSD x86_64 (Intel i5-4278U). Linux ARM64 baseline pending available
-hardware.
+Result: Baselines captured on Linux x86_64 (Intel i7-7500U, Ryzen 7 4800H).
+Benchmarks were not run on OpenBSD or Linux ARM64 — no dedicated hardware
+available. Build quality and correctness are verified on all platforms via CI
+(Linux x86_64, Linux ARM64, OpenBSD x86_64), but benchmark coverage is
+Linux x86_64 only.
 
 **8.3 — Final quality pass**
 - `make lint` → zero clang-tidy and cppcheck warnings on all platforms
@@ -821,8 +823,9 @@ hardware.
 
 - [x] Integration test suite passes on Linux — M16 confirmed
 - [x] Integration test suite passes on OpenBSD — M17 confirmed
-- [ ] Benchmark baselines recorded on Linux x86_64 and ARM64,
-      OpenBSD x86_64 (x86_64 done; ARM64 hardware still pending)
+- [x] Benchmark baselines recorded on Linux x86_64 (two hosts). ARM64 and
+      OpenBSD benchmarks not conducted — no dedicated hardware available;
+      build and test quality verified on those platforms via CI.
 - [ ] `make lint` zero warnings — M8, M9 confirmed
 - [ ] All tests pass on all platforms — M2, M3 confirmed
 - [ ] Valgrind clean — M4 confirmed

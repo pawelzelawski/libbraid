@@ -356,6 +356,14 @@ reconnect_dead_without_floor_retry(braid_pool_t *pool, braid_conn_t *conn,
 {
 	uint32_t saved_min;
 
+	/*
+	 * SAFETY: temporarily zero min_connections to suppress the dead-entry
+	 * refill push inside conn_transition(→ DEAD).  reconnect_attempt()
+	 * schedules its own backoff retry for this path; the automatic refill
+	 * would insert a duplicate zero-delay entry.  Restore immediately after
+	 * the transition returns — no other code must run between the zero and
+	 * the restore.  See ARCHITECTURE.md §6.3.
+	 */
 	saved_min = pool->config.min_connections;
 	pool->config.min_connections = 0;
 	if (from_idle)

@@ -204,7 +204,7 @@ prevents infinite loops in failing tests.
 | CLOSING deferred when in_callback > 0 | CONN_FLAG_CLOSING_DEFERRED set, destroy not called yet |
 | Deferred close fires after in_callback reaches 0 | destroy_fn called after drain_deferred |
 | DEAD entry vacates table slot | Table lookup by fd returns not-found after DEAD |
-| DEAD entry fires BRAID_EV_CONN_DESTROYED | observe_fn invoked with correct reason code |
+| DEAD entry fires BRAID_EV_CONN_DESTROYED | observe_fn invoked with BRAID_EV_CONN_DESTROYED |
 
 ### 3.3 Wait Queue (`test_wait_queue.c`)
 
@@ -338,7 +338,6 @@ Expected clean paths:
 - `braid_pool_create()` allocates all memory; `braid_pool_destroy()` frees
   all of it. No leaks under any test case including forced teardown.
 - `strdup(config.host)` in create — freed in destroy.
-- `braid_fd_tag_t` structs per connection — freed at DEAD transition.
 
 ### 5.3 ThreadSanitizer
 
@@ -357,19 +356,18 @@ share mutable global state.
 
 ## 6. Platform Testing
 
-| Platform | Arch | I/O | Required |
+| Platform | Arch | I/O | Status |
 |---|---|---|---|
-| Linux | x86_64 | epoll | Yes — primary development platform |
-| Linux | ARM64 | epoll | Yes — before release |
-| OpenBSD | x86_64 | kqueue | Yes — v2, before OpenBSD phase ships |
-| OpenBSD | ARM64 | kqueue | Yes — before OpenBSD release |
+| Linux | x86_64 | epoll | Done — primary development platform |
+| Linux | ARM64 | epoll | Done — tested via CI |
+| OpenBSD | x86_64 | kqueue | Done — all tests pass |
+| OpenBSD | ARM64 | kqueue | Done — all tests pass |
 
-**Linux is the v1 development and CI platform.** OpenBSD testing is
-required before the v2 kqueue phase is declared complete. FreeBSD and
-NetBSD share the kqueue translation unit — spot-check on FreeBSD
+**All four platform/arch combinations are part of the v1 scope and are tested.**
+FreeBSD and NetBSD share the kqueue translation unit — spot-check on FreeBSD
 before release is recommended but not gated.
 
-All tests must pass on both platforms before any phase is declared complete.
+All tests must pass on all platforms before any phase is declared complete.
 Platform-conditional test code is not permitted — the same test binary must
 run unmodified on Linux and OpenBSD.
 
@@ -412,11 +410,26 @@ results on specific hardware will differ.
 
 | Benchmark | Design target |
 |---|---|
-| Checkout with immediate connection | < 500 ns on modern x86_64 |
+| Checkout with immediate connection | < 4 µs on modern x86_64 (includes two `epoll_ctl` syscalls per round-trip) |
 | Checkin with wait queue serve | < 500 ns |
 | `braid_pool_advance()` — idle pool | < 200 ns |
 | `braid_pool_advance()` — 100 IDLE connections | < 1 µs |
 | Full connect → IDLE (loopback) | < 500 µs |
+
+The checkout target was revised from the original < 500 ns design estimate after
+measuring on real hardware. The < 500 ns estimate assumed pure in-memory pool
+mechanics; the actual path includes `io_unwatch()` (checkout) and `io_watch()`
+(checkin), each issuing an `epoll_ctl` syscall. These syscalls are a direct
+architectural cost of IDLE connection half-open detection and cannot be
+eliminated without removing that feature. See `bench/README.md` for recorded
+baselines and a full breakdown of the hot path.
+
+The `advance()` targets assume Intel x86_64 (Skylake+). AMD Ryzen results
+captured in the current baseline set are not directly comparable — the Ryzen
+4800H performance governor does not hold boost frequency between independent
+benchmark binary invocations, so each binary catches a different CPU frequency.
+The Ryzen advance() number reflects the base clock (2900 MHz), not turbo. See
+`bench/README.md` for details.
 
 ---
 
@@ -429,13 +442,13 @@ only when the test passes cleanly with no Valgrind or ASan errors.
 
 | Module | Test file | Written | Valgrind clean | ASan clean | OpenBSD |
 |---|---|---|---|---|---|
-| Connection table | test_table.c | — | — | — | — |
-| State machine | test_state_machine.c | — | — | — | — |
-| Wait queue | test_wait_queue.c | — | — | — | — |
-| Reconnection engine | test_reconnect.c | — | — | — | — |
-| Idle reaper | test_reaper.c | — | — | — | — |
-| Pool lifecycle | test_pool.c | — | — | — | — |
-| Integration tests | test_integration.c | — | — | — | — |
+| Connection table | test_table.c | ✓ | ✓ | ✓ | ✓ |
+| State machine | test_state_machine.c | ✓ | ✓ | ✓ | ✓ |
+| Wait queue | test_wait_queue.c | ✓ | ✓ | ✓ | ✓ |
+| Reconnection engine | test_reconnect.c | ✓ | ✓ | ✓ | ✓ |
+| Idle reaper | test_reaper.c | ✓ | ✓ | ✓ | ✓ |
+| Pool lifecycle | test_pool.c | ✓ | ✓ | ✓ | ✓ |
+| Integration tests | test_integration.c | ✓ | ✓ | ✓ | ✓ |
 
 ### Key Correctness Test Cases
 

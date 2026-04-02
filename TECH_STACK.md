@@ -101,8 +101,10 @@ event followed by `getsockopt(SO_ERROR)`.
 uses `TCP_KEEPALIVE` for the per-socket idle timeout override (same semantics,
 different constant name). `TCP_KEEPINTVL` and `TCP_KEEPCNT` exist on both
 platforms. `conn_keepalive_configure()` in `braid_conn.c` uses
-`#ifdef __linux__` to select the correct constant. This is the only platform
-`#ifdef` permitted outside the I/O abstraction translation units.
+`#ifdef __linux__` to select the correct constant. A second `#ifdef __linux__`
+guard in `braid_pool.c` selects between `getentropy()` (Linux) and
+`arc4random_buf()` (OpenBSD/BSD) for PRNG seeding. These are the only two
+platform `#ifdef` guards permitted outside the I/O abstraction translation units.
 
 DNS resolution uses `getaddrinfo()` called synchronously in the reconnection
 engine immediately before each connect attempt. Resolution is not cached —
@@ -234,10 +236,10 @@ make clean    # remove build artefacts
 ```makefile
 OS := $(shell uname -s)
 ifeq ($(OS),Linux)
-    PLATFORM_SRCS = src/io_epoll.c
+    PLATFORM_SRCS = src/braid_io_epoll.c
 endif
 ifeq ($(OS),OpenBSD)
-    PLATFORM_SRCS = src/io_kqueue.c
+    PLATFORM_SRCS = src/braid_io_kqueue.c
 endif
 ```
 

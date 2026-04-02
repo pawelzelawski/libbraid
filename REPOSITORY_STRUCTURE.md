@@ -41,7 +41,7 @@ include/
                         #   braid_event_t, braid_event_type_t,
                         #   braid_checkout_cb and all hook typedefs,
                         #   BRAID_OK, BRAID_ERR_*, BRAID_CONN_OK,
-                        #   BRAID_CONN_DISCARD, BRAID_REASON_*,
+                        #   BRAID_CONN_DISCARD,
                         #   braid_pool_create, braid_pool_destroy,
                         #   braid_pool_checkout, braid_pool_checkin,
                         #   braid_pool_cancel, braid_pool_advance,

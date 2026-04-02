@@ -48,14 +48,12 @@ static void pool_waitq_timeout_event_hook(void *hook_ctx);
  * needed rather than relying on the current pass.
  *
  * Processing order is fixed by ARCHITECTURE.md §9.2:
- *   1. BRAID_DEFERRED_PROCESS_DEAD  — close fds, vacate slots, insert
- *      reconnection entries for any connections whose DEAD transition was
- *      deferred by CONN_FLAG_CLOSING_DEFERRED. (Full implementation in
- *      Phase 6 — stub in Phase 4.)
+ *   1. BRAID_DEFERRED_PROCESS_DEAD  — complete DEAD transitions for
+ *      connections whose CLOSING→DEAD step was deferred by
+ *      CONN_FLAG_CLOSING_DEFERRED while in_callback > 0.
  *   2. BRAID_DEFERRED_SERVE_WAITQUEUE — serve the head of the wait queue,
  *      which may invoke a callback that is safe here because in_callback
- *      is 0 at this point. (Full implementation in Phase 6 — stub in
- *      Phase 4.)
+ *      is 0 at this point.
  */
 void
 pool_drain_deferred(braid_pool_t *pool)
@@ -85,9 +83,8 @@ pool_drain_deferred(braid_pool_t *pool)
 
 /*
  * pool_fire_event — fire a pool-level observable event via observe_fn.
- * Does NOT use the in_callback protocol — observe_fn is expected to be
- * a passive logging/metrics hook that does not call back into libbraid.
- * Pool-level events carry no connection fd; fd is set to -1.
+ * Uses the in_callback protocol. Pool-level events carry no connection fd;
+ * fd is set to -1.
  */
 static void
 pool_fire_event(braid_pool_t *pool, braid_event_type_t type)
@@ -684,23 +681,24 @@ braid_pool_cancel(braid_pool_t *pool, braid_token_t token)
 	return rc;
 }
 
-/* -- braid_pool_advance -------------------------------------------------- */
+/* ── braid_pool_advance ─────────────────────────────────────────────────────
+ */
 
 /*
- * braid_pool_advance -- drive all timer-based pool work.
+ * braid_pool_advance — drive all timer-based pool work.
  *
  * Called once per event-loop iteration, before epoll_wait().  Execution
- * order follows ARCHITECTURE.md s11:
+ * order follows ARCHITECTURE.md §11:
  *   1. Capture now_ms.
- *   2. reconnect_advance() -- pop and attempt due reconnections.
+ *   2. reconnect_advance() — pop and attempt due reconnections.
  *   2a. Enforce connect_timeout on all CONNECTING connections.
- *   3. reaper_advance() -- close idle connections above idle_reap_timeout.
- *   4. waitq_expire() -- fire BRAID_ERR_TIMEOUT for expired waiters.
+ *   3. reaper_advance() — close idle connections above idle_reap_timeout.
+ *   4. waitq_expire_with_hook() — fire BRAID_ERR_TIMEOUT for expired waiters.
  *   5. pool_drain_deferred() if not inside a callback.
  *   6. Write time-until-next-event (ms) to *next_ms; UINT32_MAX if idle.
  *
  * All callbacks fired here follow the in_callback deferred work protocol.
- * See ARCHITECTURE.md s11, DEVELOPMENT.md s6.6.
+ * See ARCHITECTURE.md §11, DEVELOPMENT.md §6.6.
  */
 int
 braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
@@ -817,10 +815,10 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 	return BRAID_OK;
 }
 
-/* -- braid_pool_notify --------------------------------------------------- */
+/* ── braid_pool_notify ──────────────────────────────────────────────────── */
 
 /*
- * braid_pool_notify -- dispatch an epoll/kqueue event for a libbraid fd.
+ * braid_pool_notify — dispatch an epoll/kqueue event for a libbraid fd.
  *
  * Called by the event loop when epoll_wait() returns an event for a fd
  * tagged with BRAID_FD_MAGIC.  Dispatches by connection state:
@@ -837,7 +835,7 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
  *   ACTIVE, INITIALIZING, CLOSING, DEAD: silently ignored.
  *
  * Always returns BRAID_OK, including for unrecognised fds (timing artefact).
- * See ARCHITECTURE.md s12, DEVELOPMENT.md s6.7.
+ * See ARCHITECTURE.md §12, DEVELOPMENT.md §6.7.
  */
 int
 braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)

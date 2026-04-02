@@ -162,7 +162,8 @@ waitq_expire_with_hook(braid_ring_t *ring, uint64_t now_ms,
 }
 
 /*
- * waitq_expire — legacy wrapper with no timeout hook.
+ * waitq_expire — convenience wrapper around waitq_expire_with_hook with no
+ * hook. Use when timeout expiry requires no side effects beyond the callback.
  */
 void
 waitq_expire(braid_ring_t *ring, uint64_t now_ms)

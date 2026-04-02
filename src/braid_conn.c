@@ -114,6 +114,11 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 
 	switch (new_state) {
 	case BRAID_STATE_CONNECTING:
+		/*
+		 * NOTE: unreachable via conn_transition(). CONNECTING is the
+		 * initial state set directly by conn_alloc() — no existing
+		 * connection ever transitions *into* CONNECTING. See §4.3.
+		 */
 		conn->created_at_ms = braid_now_ms();
 		break;
 

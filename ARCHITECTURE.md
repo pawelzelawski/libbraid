@@ -322,7 +322,11 @@ Responsibilities on each transition:
 - Remove connection from the idle reaper heap.
 
 **On CONNECTING entry:**
-- Set `conn->created_at_ms` to current monotonic time.
+- `conn->created_at_ms` is set to the current monotonic time by `conn_alloc()`
+  when the CONNECTING state is established by construction. CONNECTING is always
+  the initial state of a new connection; no existing connection transitions
+  *into* CONNECTING via `conn_transition()`, so `conn_transition()` does not
+  handle this case.
 
 **On DEAD entry:**
 - Call `destroy_fn` if not already called (CLOSING already called it).
@@ -961,8 +965,7 @@ Call `recv(fd, &probe_byte, 1, MSG_PEEK)`:
 - Returns -1 with any other error: connection error. Half-open detected.
   `conn_transition(→ CLOSING → DEAD)`.
 
-In all non-EAGAIN cases, `BRAID_REASON_HALFOPEN` is used as the
-CONN_DESTROYED reason code.
+In all non-EAGAIN cases, `conn_transition(→ CLOSING → DEAD)` is called.
 
 **Note on zero-length MSG_PEEK:** `recv(fd, NULL, 0, MSG_PEEK)` is not a
 valid liveness test — it returns 0 unconditionally on most implementations
@@ -1046,7 +1049,7 @@ No new connections are created after shutdown begins.
    a loop with short sleeps.
 4. Transition all CONNECTING sockets to DEAD: call `io_unwatch()` and
    `close(fd)` on each. `destroy_fn` is not called for CONNECTING sockets
-   (no protocol state has been established). `BRAID_REASON_SHUTDOWN` fires
+   (no protocol state has been established). `BRAID_EV_CONN_DESTROYED` fires
    via observe_fn.
 5. Transition all INITIALIZING connections to DEAD: call `destroy_fn` (may
    have partial protocol state), then `close(fd)`.
@@ -1260,18 +1263,8 @@ valid only when `err == BRAID_OK`.
 
 ### 18.3 Connection Destroyed Reason Codes
 
-Carried in `conn_destroyed.reason` in the `BRAID_EV_CONN_DESTROYED`
-observability event.
-
-| Code | Meaning |
-|---|---|
-| `BRAID_REASON_DISCARD` | Caller checked in with `BRAID_CONN_DISCARD` |
-| `BRAID_REASON_HALFOPEN` | Half-open detected via keepalive or error on notify |
-| `BRAID_REASON_VALIDATE_FAILED` | `validate_fn` returned non-zero |
-| `BRAID_REASON_INIT_FAILED` | `init_fn` returned error or deadline exceeded |
-| `BRAID_REASON_CONNECT_FAILED` | `connect()` failed or `connect_timeout` exceeded |
-| `BRAID_REASON_IDLE_REAPED` | Idle reaper threshold exceeded |
-| `BRAID_REASON_SHUTDOWN` | Pool destroy |
+Not yet implemented. The `BRAID_EV_CONN_DESTROYED` event does not carry a
+reason field in the current release. Reason code population is deferred to v2.
 
 ---
 

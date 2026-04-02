@@ -76,18 +76,6 @@ typedef void (*braid_checkout_cb)(int fd, void *conn_ctx, int err,
 #define BRAID_CONN_DISCARD 1 /* discard connection, trigger destroy */
 
 /*
- * Connection destroyed reason codes — carried in BRAID_EV_CONN_DESTROYED.
- */
-
-#define BRAID_REASON_DISCARD 0
-#define BRAID_REASON_HALFOPEN 1
-#define BRAID_REASON_VALIDATE_FAILED 2
-#define BRAID_REASON_INIT_FAILED 3
-#define BRAID_REASON_CONNECT_FAILED 4
-#define BRAID_REASON_IDLE_REAPED 5
-#define BRAID_REASON_SHUTDOWN 6
-
-/*
  * Observability event types.
  */
 
@@ -106,9 +94,6 @@ struct braid_event {
 	braid_event_type_t type;
 	int fd;
 	union {
-		struct {
-			uint32_t reason; /* BRAID_REASON_* */
-		} conn_destroyed;
 		struct {
 			uint32_t attempt;
 			int success;
@@ -159,19 +144,132 @@ struct braid_config {
 
 /*
  * Public API function declarations.
- * (Implementations land in Phase 6 — braid_pool.c.)
  */
 
+/*
+ * braid_pool_create — allocate and initialise a connection pool.
+ *
+ * config    — pool configuration; all fields are copied; config->host is
+ *             deep-copied via strdup() and may be freed by the caller after
+ *             this call returns.
+ * err       — if non-NULL, receives BRAID_OK on success or a BRAID_ERR_*
+ *             code on failure.
+ *
+ * Returns a pool handle on success, NULL on failure. The caller owns the
+ * returned pool and must eventually pass it to braid_pool_destroy().
+ *
+ * See ARCHITECTURE.md §13.1.
+ */
 braid_pool_t *braid_pool_create(const braid_config_t *config, int *err);
+
+/*
+ * braid_pool_destroy — orderly teardown of all pool resources.
+ *
+ * pool              — pool to destroy. NULL is a no-op.
+ * drain_timeout_ms  — milliseconds to wait for ACTIVE connections to be
+ *                     checked in before force-closing them. Pass 0 to skip
+ *                     the drain wait.
+ *
+ * Cancels all pending waiters, closes all internal fds, and frees all
+ * pool memory. After this call, pool is invalid and must not be used.
+ * May block for up to drain_timeout_ms if ACTIVE connections are outstanding.
+ *
+ * See ARCHITECTURE.md §13.2.
+ */
 void braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms);
 
+/*
+ * braid_pool_checkout — acquire a connection from the pool.
+ *
+ * pool        — pool to check out from.
+ * timeout_ms  — if no IDLE connection is available, wait up to this many
+ *               milliseconds. Pass 0 to return immediately without waiting.
+ * cb          — callback invoked exactly once with the result. When
+ *               err == BRAID_OK, fd is valid and exclusively owned by the
+ *               caller until braid_pool_checkin() is called. When err != 0,
+ *               fd is -1 and conn_ctx is NULL.
+ * cb_ctx      — opaque pointer passed through to cb unchanged.
+ * token       — if non-NULL and a waiter is enqueued (timeout_ms > 0 and no
+ *               IDLE connection was immediately available), receives a token
+ *               that can be passed to braid_pool_cancel() to cancel the wait.
+ *
+ * Returns BRAID_OK if a connection was immediately available (cb already
+ * fired) or a waiter was enqueued. Returns BRAID_ERR_EXHAUSTED (without
+ * invoking cb) if no connection is available and timeout_ms == 0.
+ *
+ * See ARCHITECTURE.md §11.
+ */
 int braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 			braid_checkout_cb cb, void *cb_ctx,
 			braid_token_t *token);
+
+/*
+ * braid_pool_checkin — return or discard an ACTIVE connection.
+ *
+ * pool   — owning pool.
+ * fd     — file descriptor received via a checkout callback.
+ * flags  — BRAID_CONN_OK to return the connection to IDLE state; or
+ *           BRAID_CONN_DISCARD to close and replace the connection.
+ *
+ * Ownership of fd reverts to libbraid on return. After this call the caller
+ * must not access fd. Returns BRAID_ERR_INVAL if fd is not a recognised
+ * ACTIVE connection in pool.
+ *
+ * See ARCHITECTURE.md §9.
+ */
 int braid_pool_checkin(braid_pool_t *pool, int fd, int flags);
+
+/*
+ * braid_pool_cancel — cancel a pending checkout waiter by token.
+ *
+ * pool   — owning pool.
+ * token  — token received via the token output of braid_pool_checkout().
+ *
+ * If the waiter has not yet been served or timed out, cancels it and invokes
+ * its callback with BRAID_ERR_CANCELLED. If the token is stale (already
+ * served, expired, or wrapped around), this is a silent no-op — it is always
+ * safe to call cancel regardless of the waiter's current state.
+ *
+ * See ARCHITECTURE.md §9.2.
+ */
 int braid_pool_cancel(braid_pool_t *pool, braid_token_t token);
 
+/*
+ * braid_pool_advance — drive all timer-based pool work.
+ *
+ * pool     — pool to advance.
+ * next_ms  — if non-NULL, receives the number of milliseconds until the
+ *            next scheduled event (suitable for use as an epoll_wait /
+ *            kevent timeout). UINT32_MAX means no event is pending.
+ *
+ * Must be called once per event-loop iteration, before epoll_wait() /
+ * kevent(). Processes due reconnection attempts, enforces connect_timeout
+ * on CONNECTING sockets, reaps idle connections, and expires wait queue
+ * timeouts. May invoke init_fn, destroy_fn, checkout callbacks, and
+ * observe_fn during this call.
+ *
+ * braid_pool_advance() calls clock_gettime() exactly once per call.
+ * May block briefly on getaddrinfo() during reconnection attempts.
+ *
+ * See ARCHITECTURE.md §11.
+ */
 int braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms);
+
+/*
+ * braid_pool_notify — dispatch an epoll/kqueue event for a libbraid fd.
+ *
+ * pool    — owning pool.
+ * fd      — file descriptor reported by epoll_wait() / kevent().
+ * events  — event flags from the epoll_event or kevent structure; the value
+ *            is accepted but not used — dispatch is state-based.
+ *
+ * Must be called by the event loop for every event whose epoll_data.ptr
+ * (or kevent udata) has BRAID_FD_MAGIC set in the braid_fd_tag_t struct.
+ * Handles CONNECTING completion, INITIALIZING, and IDLE half-open detection.
+ * Always returns BRAID_OK, including for unrecognised fds (timing artefact).
+ *
+ * See ARCHITECTURE.md §12.
+ */
 int braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events);
 
 #endif /* BRAID_H */
