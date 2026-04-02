@@ -4,7 +4,7 @@
 
 **Last Updated**: 2026-04-02
 **Current Phase**: Phase 8 in progress
-**Next Task**: Phase 8 COMPLETE — apply v1.0.0 release tag
+**Next Task**: Phase 8 COMPLETE — project at v1.0.0
 
 ### Phase Summary
 
@@ -842,7 +842,7 @@ embedders can perform the tag-based event dispatch without internal headers.
 - [x] TSan clean on Linux — M7 confirmed
 - [x] All quality milestone status cells updated to DONE
 - [x] README.md complete and integration example compiles and runs
-- [ ] v1.0.0 release tag applied
+- [x] v1.0.0 release tag applied
 
 ---
 
@@ -879,6 +879,6 @@ embedders can perform the tag-based event dispatch without internal headers.
 ---
 
 **Document Version**: 1.0
-**Last Updated**: 2026-03-30
+**Last Updated**: 2026-04-02 (v1.0.0 release)
 **See Also**: PROJECT.md, ARCHITECTURE.md, TECH_STACK.md, CODING_STANDARDS.md,
 REPOSITORY_STRUCTURE.md, TESTING.md
