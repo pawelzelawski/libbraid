@@ -50,10 +50,9 @@ reaper_swap(braid_idle_heap_t *heap, uint32_t a, uint32_t b)
 static void
 reaper_sift_up(braid_idle_heap_t *heap, uint32_t i)
 {
-	uint32_t parent;
-
 	while (i > 0) {
-		parent = (i - 1) / 2;
+		uint32_t parent = (i - 1) / 2;
+
 		if (heap->entries[parent].last_active_ms <=
 		    heap->entries[i].last_active_ms)
 			break;
@@ -69,12 +68,10 @@ reaper_sift_up(braid_idle_heap_t *heap, uint32_t i)
 static void
 reaper_sift_down(braid_idle_heap_t *heap, uint32_t i)
 {
-	uint32_t left, right, smallest;
-
 	for (;;) {
-		left = (2 * i) + 1;
-		right = (2 * i) + 2;
-		smallest = i;
+		uint32_t left = (2 * i) + 1;
+		uint32_t right = (2 * i) + 2;
+		uint32_t smallest = i;
 
 		if (left < heap->count &&
 		    heap->entries[left].last_active_ms <
@@ -157,7 +154,6 @@ int
 reaper_heap_remove(braid_idle_heap_t *heap, braid_conn_t *conn)
 {
 	uint32_t i;
-	braid_conn_t *moved;
 
 	if (heap->count == 0 || conn->heap_index == UINT32_MAX)
 		return BRAID_ERR_INVAL;
@@ -166,6 +162,8 @@ reaper_heap_remove(braid_idle_heap_t *heap, braid_conn_t *conn)
 	heap->count--;
 
 	if (i < heap->count) {
+		braid_conn_t *moved;
+
 		heap->entries[i] = heap->entries[heap->count];
 		moved = heap->entries[i].conn;
 		moved->heap_index = i;

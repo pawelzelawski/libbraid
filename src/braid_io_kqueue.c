@@ -140,7 +140,7 @@ io_modify(braid_pool_t *pool, int fd, uint32_t events)
 }
 
 int
-io_unwatch(braid_pool_t *pool, int fd)
+io_unwatch(const braid_pool_t *pool, int fd)
 {
 	struct kevent kev;
 	int rc;

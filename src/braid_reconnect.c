@@ -118,10 +118,9 @@ heap_swap(braid_reconnect_heap_t *heap, uint32_t a, uint32_t b)
 static void
 heap_bubble_up(braid_reconnect_heap_t *heap, uint32_t i)
 {
-	uint32_t parent;
-
 	while (i > 0) {
-		parent = (i - 1) / 2;
+		uint32_t parent = (i - 1) / 2;
+
 		if (heap->entries[parent].next_retry_ms <=
 		    heap->entries[i].next_retry_ms)
 			break;
@@ -138,12 +137,10 @@ heap_bubble_up(braid_reconnect_heap_t *heap, uint32_t i)
 static void
 heap_sift_down(braid_reconnect_heap_t *heap, uint32_t i)
 {
-	uint32_t left, right, smallest;
-
 	for (;;) {
-		left = (2 * i) + 1;
-		right = (2 * i) + 2;
-		smallest = i;
+		uint32_t left = (2 * i) + 1;
+		uint32_t right = (2 * i) + 2;
+		uint32_t smallest = i;
 
 		if (left < heap->count &&
 		    heap->entries[left].next_retry_ms <

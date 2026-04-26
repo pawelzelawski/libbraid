@@ -18,6 +18,5 @@ int conn_transition(braid_pool_t *pool, braid_conn_t *conn,
 int conn_alloc(braid_pool_t *pool, int fd, braid_conn_t **conn);
 int conn_socket_create(braid_pool_t *pool, struct addrinfo *ai, int *fd,
 		       int *immediate);
-int conn_keepalive_configure(int fd, const braid_config_t *config);
 
 #endif /* BRAID_CONN_H */

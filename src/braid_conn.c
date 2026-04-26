@@ -262,25 +262,29 @@ int
 conn_alloc(braid_pool_t *pool, int fd, braid_conn_t **conn)
 {
 	braid_conn_t tmp;
+	braid_conn_t *ptr;
 	int rc;
 
 	/*
-	 * table_insert() reads (*conn)->fd to find the right probe chain,
+	 * table_insert() reads (*ptr)->fd to find the right probe chain,
 	 * so we must initialise a local record with the fd set before calling
 	 * it.  table_insert() copies the record into the table slot and sets
-	 * *conn to point to that slot.
+	 * *ptr to point to that slot.
 	 */
 	memset(&tmp, 0, sizeof(tmp));
 	tmp.fd = fd;
-	*conn = &tmp;
+	ptr = &tmp;
 
-	rc = table_insert(pool, conn);
+	rc = table_insert(pool, &ptr);
 	if (rc != BRAID_OK) {
 		*conn = NULL;
 		return rc;
 	}
 
-	/* *conn now points to the in-table slot.  Fix up non-zero fields. */
+	/* ptr now points to the in-table slot; publish it to the caller. */
+	*conn = ptr;
+
+	/* Fix up non-zero fields. */
 	(*conn)->state = BRAID_STATE_CONNECTING;
 	(*conn)->heap_index = UINT32_MAX;
 	(*conn)->created_at_ms = braid_now_ms();
@@ -308,7 +312,7 @@ conn_alloc(braid_pool_t *pool, int fd, braid_conn_t **conn)
  * platforms or suppressed by strict POSIX feature-test macros. SO_KEEPALIVE
  * is always set. See ARCHITECTURE.md §5.
  */
-int
+static int
 conn_keepalive_configure(int fd, const braid_config_t *config)
 {
 	int one = 1;

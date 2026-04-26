@@ -58,9 +58,9 @@ static void pool_waitq_timeout_event_hook(void *hook_ctx);
 void
 pool_drain_deferred(braid_pool_t *pool)
 {
-	uint32_t i;
-
 	if (pool->deferred_work & BRAID_DEFERRED_PROCESS_DEAD) {
+		uint32_t i;
+
 		pool->deferred_work &= ~BRAID_DEFERRED_PROCESS_DEAD;
 		for (i = 0; i < pool->table_size; i++) {
 			braid_conn_t *conn = &pool->table[i];
@@ -189,7 +189,7 @@ pool_active_count(braid_pool_t *pool)
 	uint32_t i;
 
 	for (i = 0; i < pool->table_size; i++) {
-		braid_conn_t *c = &pool->table[i];
+		const braid_conn_t *c = &pool->table[i];
 
 		if (c->fd != -1 && !(c->flags & CONN_FLAG_TOMBSTONE) &&
 		    c->state == BRAID_STATE_ACTIVE)
@@ -779,7 +779,7 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 		uint32_t j;
 
 		for (j = 0; j < span; j++) {
-			braid_waiter_t *slot =
+			const braid_waiter_t *slot =
 			    &pool->waitq.slots[(pool->waitq.head + j) %
 					       pool->waitq.cap];
 

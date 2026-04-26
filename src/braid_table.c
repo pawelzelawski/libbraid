@@ -64,12 +64,13 @@ int
 table_lookup(braid_pool_t *pool, int fd, braid_conn_t **conn)
 {
 	braid_conn_t *s;
-	uint32_t i, slot;
+	uint32_t i;
 
 	*conn = NULL;
 
 	for (i = 0; i < pool->table_size; i++) {
-		slot = ((uint32_t)fd + i) % pool->table_size;
+		uint32_t slot = ((uint32_t)fd + i) % pool->table_size;
+
 		s = &pool->table[slot];
 
 		if (s->flags & CONN_FLAG_TOMBSTONE)
@@ -99,14 +100,15 @@ int
 table_insert(braid_pool_t *pool, braid_conn_t **conn)
 {
 	braid_conn_t *s, *tombstone;
-	uint32_t i, slot;
+	uint32_t i;
 	int fd;
 
 	fd = (*conn)->fd;
 	tombstone = NULL;
 
 	for (i = 0; i < pool->table_size; i++) {
-		slot = ((uint32_t)fd + i) % pool->table_size;
+		uint32_t slot = ((uint32_t)fd + i) % pool->table_size;
+
 		s = &pool->table[slot];
 
 		if (s->flags & CONN_FLAG_TOMBSTONE) {

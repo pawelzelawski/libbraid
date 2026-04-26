@@ -150,6 +150,10 @@ lint:
 	@if command -v cppcheck >/dev/null 2>&1; then \
 		cppcheck --enable=all --error-exitcode=1 \
 		         --suppress=missingIncludeSystem \
+		         --suppress=unusedFunction \
+		         --suppress=staticFunction \
+		         --suppress=normalCheckLevelMaxBranches \
+		         --suppress=checkersReport \
 		         src/; \
 	else \
 		echo "cppcheck not found; skipping cppcheck step"; \

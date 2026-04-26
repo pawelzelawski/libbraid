@@ -135,10 +135,8 @@ void
 waitq_expire_with_hook(braid_ring_t *ring, uint64_t now_ms,
 		       waitq_expire_hook_fn hook, void *hook_ctx)
 {
-	braid_waiter_t *slot;
-
 	while (ring->count > 0) {
-		slot = &ring->slots[ring->head % ring->cap];
+		braid_waiter_t *slot = &ring->slots[ring->head % ring->cap];
 
 		/* Drain stale tombstones from the front. */
 		if (slot->flags & WAITER_FLAG_TOMBSTONE) {
@@ -179,7 +177,6 @@ waitq_expire(braid_ring_t *ring, uint64_t now_ms)
 void
 waitq_shutdown(braid_ring_t *ring)
 {
-	braid_waiter_t *slot;
 	uint32_t i;
 	uint32_t span;
 
@@ -189,7 +186,8 @@ waitq_shutdown(braid_ring_t *ring)
 	 */
 	span = ring->tail - ring->head;
 	for (i = 0; i < span; i++) {
-		slot = &ring->slots[(ring->head + i) % ring->cap];
+		braid_waiter_t *slot =
+		    &ring->slots[(ring->head + i) % ring->cap];
 		if (slot->flags & WAITER_FLAG_TOMBSTONE)
 			continue;
 		slot->flags |= WAITER_FLAG_TOMBSTONE;
