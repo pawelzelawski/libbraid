@@ -472,9 +472,9 @@ application-level check at the moment a connection is about to be used.
 ### 6.1 Reconnection Heap
 
 The reconnection engine manages connections that have reached DEAD and need
-to be replaced to maintain `min_connections`. It uses a min-heap keyed on
-`next_retry_ms` — the absolute monotonic time at which the next connect
-attempt should be made.
+to be replaced to maintain `min_connections`, plus capacity requested by
+queued checkouts. It uses a min-heap keyed on `next_retry_ms` — the absolute
+monotonic time at which the next connect attempt should be made.
 
 **Structure:**
 
@@ -491,6 +491,13 @@ No fd, no destination — both are pool-global. The host and port come from
 **Heap size:** Fixed at `max_connections` slots, allocated at pool creation.
 At most `max_connections` connections can be dead and pending reconnection
 simultaneously.
+
+**Demand growth:** `min_connections` is a warm baseline, not a fixed pool
+size. A checkout with `timeout_ms > 0` that must queue raises the capacity
+target to `ACTIVE + queued waiters`, capped at `max_connections`; live and
+already-scheduled connections count toward that target. A timeout of zero
+never schedules a connection. The idle reaper eventually returns unused
+surplus capacity to the minimum floor.
 
 **Operations:**
 - `reconnect_heap_push(heap, entry)` — O(log n) insert after bubble-up
@@ -567,7 +574,9 @@ On each `braid_pool_advance()` call:
 9. **If `connect()` returns any other error**: treat as failed attempt.
    Insert a new reconnect entry for `attempt+1` with backoff delay. Fire
    `BRAID_EV_RECONNECT_ATTEMPT` with failure.
-10. Fire `BRAID_EV_RECONNECT_ATTEMPT` with attempt number (in-progress cases).
+10. When a connection reaches IDLE, immediately serve the oldest queued
+    waiter before leaving reconnect processing.
+11. Fire `BRAID_EV_RECONNECT_ATTEMPT` with attempt number (in-progress cases).
 
 **Reconnect entry bookkeeping:** A new reconnect heap entry for `attempt+1`
 is inserted **only on failure** — either a connect() error, a DNS failure,
@@ -577,6 +586,11 @@ as IDLE, so asynchronous failure and connect timeout preserve the backoff
 sequence rather than restarting at attempt zero. It is not pre-inserted at
 attempt start. If the attempt succeeds (CONNECTING→INITIALIZING→IDLE), no
 follow-up entry is needed and none is inserted.
+
+**Terminal failure:** When a finite `backoff_max_attempts` limit is reached,
+and there is no live connection or pending reconnect that can serve queued
+checkouts, all queued callbacks receive `BRAID_ERR_CONNFAIL`. Existing ACTIVE
+connections remain usable and may still serve waiters when checked in.
 
 **`connect_timeout` enforcement:** CONNECTING connections that have exceeded
 `created_at_ms + connect_timeout` are aborted by `braid_pool_advance()` (see

@@ -12,5 +12,7 @@
 #include "braid_internal.h"
 
 void pool_drain_deferred(braid_pool_t *pool);
+int pool_serve_waiter(braid_pool_t *pool);
+void pool_fail_waiters_connfail(braid_pool_t *pool);
 
 #endif /* BRAID_POOL_H */

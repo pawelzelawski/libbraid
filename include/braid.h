@@ -196,7 +196,9 @@ void braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms);
  *
  * pool        — pool to check out from.
  * timeout_ms  — if no IDLE connection is available, wait up to this many
- *               milliseconds. Pass 0 to return immediately without waiting.
+ *               milliseconds. A non-zero timeout may start reconnect work to
+ *               satisfy queued demand; 0 returns immediately without creating
+ *               a connection.
  * cb          — callback invoked exactly once with the result. When
  *               err == BRAID_OK, fd is valid and exclusively owned by the
  *               caller until braid_pool_checkin() is called. When err != 0,

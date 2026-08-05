@@ -34,9 +34,6 @@ void arc4random_buf(void *, size_t);
 #include "braid_table.h"
 #include "braid_waitq.h"
 
-/* Forward declaration: defined after pool_fire_event and pool_active_count. */
-static int pool_serve_waiter(braid_pool_t *pool);
-
 static void pool_fire_conn_destroyed_event(braid_pool_t *pool, int fd);
 static void pool_waitq_timeout_event_hook(void *hook_ctx);
 
@@ -144,7 +141,7 @@ pool_waitq_timeout_event_hook(void *hook_ctx)
  * Returns BRAID_OK if a waiter was served, BRAID_ERR_EXHAUSTED if no
  * IDLE connection or no waiter was available.
  */
-static int
+int
 pool_serve_waiter(braid_pool_t *pool)
 {
 	uint32_t i;
@@ -176,6 +173,21 @@ pool_serve_waiter(braid_pool_t *pool)
 	return BRAID_ERR_EXHAUSTED;
 }
 
+/* Fail queued checkouts only when no live or scheduled connection remains. */
+void
+pool_fail_waiters_connfail(braid_pool_t *pool)
+{
+	if (pool->live_count != 0 || pool->reconnect.count != 0 ||
+	    pool->waitq.count == 0)
+		return;
+
+	pool->in_callback++;
+	waitq_fail_all(&pool->waitq, BRAID_ERR_CONNFAIL);
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
+}
+
 /* ── pool_active_count ───────────────────────────────────────────────── */
 
 /*
@@ -196,6 +208,30 @@ pool_active_count(braid_pool_t *pool)
 			count++;
 	}
 	return count;
+}
+
+/* Schedule attempt-zero entries until capacity can satisfy queued demand. */
+static void
+pool_schedule_demand(braid_pool_t *pool)
+{
+	uint32_t target;
+	uint32_t planned;
+
+	target = pool_active_count(pool) + pool->waitq.count;
+	if (target < pool->config.min_connections)
+		target = pool->config.min_connections;
+	if (target > pool->config.max_connections)
+		target = pool->config.max_connections;
+
+	planned = pool->live_count + pool->reconnect.count;
+	while (planned < target && planned < pool->config.max_connections) {
+		braid_reconnect_entry_t entry;
+
+		memset(&entry, 0, sizeof(entry));
+		if (reconnect_heap_push(&pool->reconnect, entry) != BRAID_OK)
+			break;
+		planned++;
+	}
 }
 
 /* ── braid_pool_create ───────────────────────────────────────────────── */
@@ -592,6 +628,9 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 		 */
 		if (pool->live_count >= pool->config.max_connections)
 			pool_fire_event(pool, BRAID_EV_POOL_EXHAUSTED);
+
+		/* Only queued checkout demand creates capacity above the warm floor. */
+		pool_schedule_demand(pool);
 	}
 
 	return BRAID_OK;
@@ -918,6 +957,7 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 				conn_transition(pool, conn, BRAID_STATE_CLOSING);
 		} else {
 			conn->flags &= ~CONN_FLAG_RECONNECT_PENDING;
+			pool_serve_waiter(pool);
 		}
 		break;
 	}

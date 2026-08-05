@@ -23,6 +23,7 @@ typedef void (*waitq_expire_hook_fn)(void *hook_ctx);
 void waitq_expire_with_hook(braid_ring_t *ring, uint64_t now_ms,
 			    waitq_expire_hook_fn hook, void *hook_ctx);
 void waitq_expire(braid_ring_t *ring, uint64_t now_ms);
+void waitq_fail_all(braid_ring_t *ring, int err);
 void waitq_shutdown(braid_ring_t *ring);
 
 #endif /* BRAID_WAITQ_H */

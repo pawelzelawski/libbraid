@@ -425,6 +425,7 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 	if (pool->config.backoff_max_attempts > 0 &&
 	    entry.attempt >= pool->config.backoff_max_attempts) {
 		reconnect_fire_event(pool, -1, entry.attempt, 0);
+		pool_fail_waiters_connfail(pool);
 		return BRAID_OK;
 	}
 
@@ -514,6 +515,7 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 			return BRAID_OK;
 		}
 		conn->flags &= ~CONN_FLAG_RECONNECT_PENDING;
+		pool_serve_waiter(pool);
 	} else {
 		/*
 		 * Step 5b: EINPROGRESS — conn already in CONNECTING state

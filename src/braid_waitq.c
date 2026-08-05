@@ -192,31 +192,32 @@ waitq_expire(braid_ring_t *ring, uint64_t now_ms)
 }
 
 /*
- * waitq_shutdown — invoke BRAID_ERR_SHUTDOWN for every non-tombstone waiter
- * in the ring. Scans the full occupied span [head, tail). Resets count to 0
- * and advances head to tail so the ring is empty on return.
+ * waitq_fail_all — invoke err for every waiter present at entry. Advances the
+ * head before each callback so callback re-entrancy may safely enqueue new
+ * waiters beyond the captured tail without being consumed by this drain.
  */
 void
-waitq_shutdown(braid_ring_t *ring)
+waitq_fail_all(braid_ring_t *ring, int err)
 {
-	uint32_t i;
-	uint32_t span;
+	uint32_t end = ring->tail;
 
-	/*
-	 * span covers all occupied positions: live and already-tombstoned.
-	 * Subtraction wraps correctly for uint32_t when tail < head (overflow).
-	 */
-	span = ring->tail - ring->head;
-	for (i = 0; i < span; i++) {
-		braid_waiter_t *slot =
-		    &ring->slots[(ring->head + i) % ring->cap];
+	while (ring->head != end) {
+		braid_waiter_t *slot = &ring->slots[ring->head % ring->cap];
+
+		ring->head++;
 		if (slot->flags & WAITER_FLAG_TOMBSTONE)
 			continue;
 		slot->flags |= WAITER_FLAG_TOMBSTONE;
+		ring->count--;
 		/* SAFETY: tombstone before callback; prevents
 		 * double-invocation. */
-		slot->cb(-1, NULL, BRAID_ERR_SHUTDOWN, slot->cb_ctx);
+		slot->cb(-1, NULL, err, slot->cb_ctx);
 	}
-	ring->count = 0;
-	ring->head = ring->tail;
+}
+
+/* Invoke BRAID_ERR_SHUTDOWN for every waiter present at shutdown entry. */
+void
+waitq_shutdown(braid_ring_t *ring)
+{
+	waitq_fail_all(ring, BRAID_ERR_SHUTDOWN);
 }

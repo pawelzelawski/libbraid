@@ -685,8 +685,148 @@ test_checkout_enqueues(void)
 	CHECK("checkout-enq: token written (non-zero or valid)",
 	      1); /* always */
 	CHECK("checkout-enq: waitq count is 1", pool->waitq.count == 1);
+	CHECK("checkout-enq: one demand reconnect scheduled",
+	      pool->reconnect.count == 1);
 
 	braid_pool_destroy(pool, 0); /* shutdown calls BRAID_ERR_SHUTDOWN */
+	close(epfd);
+}
+
+/* Queued demand grows to max_connections; zero-timeout checkout never grows. */
+static void
+test_checkout_demand_scales_capacity(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	cb_recorder_t rec;
+	int err = 0;
+	int epfd;
+
+	memset(&rec, 0, sizeof(rec));
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("demand-scale: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 3);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("demand-scale: create", 0);
+		close(epfd);
+		return;
+	}
+
+	CHECK_ERR("demand-scale: queue one",
+		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+		  BRAID_OK);
+	CHECK_ERR("demand-scale: queue two",
+		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+		  BRAID_OK);
+	CHECK_ERR("demand-scale: queue three",
+		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+		  BRAID_OK);
+	CHECK("demand-scale: three retries scheduled", pool->reconnect.count == 3);
+	CHECK_ERR("demand-scale: zero timeout exhausted",
+		  braid_pool_checkout(pool, 0, recording_checkout_cb, &rec, NULL),
+		  BRAID_ERR_EXHAUSTED);
+	CHECK("demand-scale: zero timeout did not schedule", pool->reconnect.count == 3);
+
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+static int
+pool_fake_socket_create_immediate(braid_pool_t *pool, struct addrinfo *ai,
+				  int *fd_out, int *immediate_out)
+{
+	int sv[2];
+
+	(void)pool;
+	(void)ai;
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
+		return BRAID_ERR_SYSCALL;
+	close(sv[1]);
+	*fd_out = sv[0];
+	*immediate_out = 1;
+	return BRAID_OK;
+}
+
+/* A successfully connected demand slot immediately serves the queue head. */
+static void
+test_reconnect_arrival_serves_waiter(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	cb_recorder_t rec;
+	uint32_t next_ms;
+	int err = 0;
+	int epfd;
+
+	memset(&rec, 0, sizeof(rec));
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("arrival-serves: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 2);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("arrival-serves: create", 0);
+		close(epfd);
+		return;
+	}
+	reconnect_test_set_socket_create_hook(pool_fake_socket_create_immediate);
+	CHECK_ERR("arrival-serves: queue",
+		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+		  BRAID_OK);
+	CHECK_ERR("arrival-serves: advance", braid_pool_advance(pool, &next_ms),
+		  BRAID_OK);
+	CHECK("arrival-serves: callback fired", rec.call_count == 1);
+	CHECK("arrival-serves: callback succeeded", rec.err[0] == BRAID_OK);
+	CHECK("arrival-serves: queue drained", pool->waitq.count == 0);
+	if (rec.call_count == 1)
+		braid_pool_checkin(pool, rec.fd[0], BRAID_CONN_DISCARD);
+	reconnect_test_set_socket_create_hook(NULL);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+/* Exhausting a finite reconnect budget fails stranded queued checkouts. */
+static void
+test_reconnect_exhaustion_fails_waiters(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	cb_recorder_t rec;
+	uint32_t next_ms;
+	int err = 0;
+	int epfd;
+
+	memset(&rec, 0, sizeof(rec));
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("connfail: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 2);
+	cfg.backoff_max_attempts = 1;
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("connfail: create", 0);
+		close(epfd);
+		return;
+	}
+	CHECK_ERR("connfail: queue",
+		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+		  BRAID_OK);
+	pool->reconnect.entries[0].attempt = 1;
+	CHECK_ERR("connfail: advance", braid_pool_advance(pool, &next_ms),
+		  BRAID_OK);
+	CHECK("connfail: callback fired", rec.call_count == 1);
+	CHECK("connfail: callback error", rec.err[0] == BRAID_ERR_CONNFAIL);
+	CHECK("connfail: queue drained", pool->waitq.count == 0);
+
+	braid_pool_destroy(pool, 0);
 	close(epfd);
 }
 
@@ -2079,6 +2219,9 @@ run_pool_tests(void)
 	test_checkout_immediate();
 	test_active_event_registration_handoff();
 	test_checkout_enqueues();
+	test_checkout_demand_scales_capacity();
+	test_reconnect_arrival_serves_waiter();
+	test_reconnect_exhaustion_fails_waiters();
 	test_checkin_conn_ok();
 	test_checkin_conn_discard();
 	test_checkin_unknown_fd();
