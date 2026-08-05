@@ -24,6 +24,7 @@ int reconnect_heap_pop(braid_reconnect_heap_t *heap,
 void reconnect_heap_clear(braid_reconnect_heap_t *heap);
 uint64_t reconnect_backoff_delay(braid_pool_t *pool, uint32_t attempt);
 int reconnect_advance(braid_pool_t *pool, uint64_t now_ms);
+void reconnect_fail_inflight(braid_pool_t *pool, braid_conn_t *conn);
 
 #ifdef BRAID_TEST_CLOCK
 struct addrinfo;

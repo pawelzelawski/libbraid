@@ -1911,6 +1911,57 @@ test_notify_io_modify_failure_discards_connection(void)
 	braid_pool_destroy(pool, 0);
 }
 
+/* An asynchronous reconnect failure must retain and increment its attempt. */
+static void
+test_notify_reconnect_failure_preserves_backoff_attempt(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	braid_reconnect_entry_t entry;
+	int err = 0;
+	int epfd, peer_fd;
+	int fd;
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("notify-retry-attempt: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 4);
+	cfg.backoff_base = 1;
+	cfg.backoff_cap = 1;
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("notify-retry-attempt: create", 0);
+		close(epfd);
+		return;
+	}
+
+	conn = alloc_connecting_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("notify-retry-attempt: alloc connecting", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+	conn->flags |= CONN_FLAG_RECONNECT_PENDING;
+	conn->heap_index = 4;
+	fd = conn->fd;
+	close(fd); /* force getsockopt() failure in braid_pool_notify(). */
+
+	CHECK_ERR("notify-retry-attempt: notify",
+		  braid_pool_notify(pool, fd, BRAID_IO_WRITE), BRAID_OK);
+	CHECK("notify-retry-attempt: connection discarded", pool->live_count == 0);
+	CHECK_ERR("notify-retry-attempt: retry queued",
+		  reconnect_heap_peek(&pool->reconnect, &entry), BRAID_OK);
+	CHECK("notify-retry-attempt: attempt incremented", entry.attempt == 5);
+
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
 #ifndef __linux__
 /*
  * kqueue: io_modify must propagate a hard failure from the first EV_DELETE
@@ -2047,6 +2098,7 @@ run_pool_tests(void)
 	test_init_fn_deadline_exceeded();
 	test_init_fn_elapsed_deadline_enforced();
 	test_notify_io_modify_failure_discards_connection();
+	test_notify_reconnect_failure_preserves_backoff_attempt();
 #ifndef __linux__
 	test_kqueue_io_modify_delete_error_propagates();
 	test_kqueue_io_unwatch_delete_error_propagates();

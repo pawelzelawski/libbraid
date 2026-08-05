@@ -94,6 +94,8 @@ typedef enum {
 #define CONN_FLAG_CLOSING_DEFERRED                                             \
 	0x02u /* CLOSING→DEAD deferred from callback */
 #define CONN_FLAG_EVER_ACTIVE 0x04u /* connection was ACTIVE at least once */
+#define CONN_FLAG_RECONNECT_PENDING                                            \
+	0x08u /* retain reconnect attempt until connection is established */
 
 /* Wait queue entry flag bits. */
 #define WAITER_FLAG_TOMBSTONE 0x01u /* entry cancelled or served */
@@ -120,7 +122,7 @@ typedef struct braid_conn {
 	uint64_t created_at_ms; /* monotonic ms, set at CONNECTING entry */
 	uint64_t last_active_ms; /* monotonic ms, updated at IDLE entry */
 	uint32_t flags; /* CONN_FLAG_* bitfield */
-	uint32_t heap_index; /* idle reaper heap position; UINT32_MAX out */
+	uint32_t heap_index; /* idle reaper position; reconnect attempt while pending */
 	braid_fd_tag_t tag; /* epoll sentinel — inline, no alloc needed */
 } braid_conn_t;
 

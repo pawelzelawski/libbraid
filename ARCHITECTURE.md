@@ -571,10 +571,12 @@ On each `braid_pool_advance()` call:
 
 **Reconnect entry bookkeeping:** A new reconnect heap entry for `attempt+1`
 is inserted **only on failure** — either a connect() error, a DNS failure,
-or a subsequent CONNECTING→DEAD transition (see §4.3). It is not pre-inserted
-at attempt start. If the attempt succeeds (CONNECTING→INITIALIZING→IDLE),
-no follow-up entry is needed and none is inserted. This keeps the heap
-accurate with no identity-matching required.
+or a subsequent CONNECTING/INITIALIZING/registration failure. The pending
+connection retains its originating attempt number until it is fully registered
+as IDLE, so asynchronous failure and connect timeout preserve the backoff
+sequence rather than restarting at attempt zero. It is not pre-inserted at
+attempt start. If the attempt succeeds (CONNECTING→INITIALIZING→IDLE), no
+follow-up entry is needed and none is inserted.
 
 **`connect_timeout` enforcement:** CONNECTING connections that have exceeded
 `created_at_ms + connect_timeout` are aborted by `braid_pool_advance()` (see
@@ -1042,7 +1044,9 @@ No new connections are created after shutdown begins.
 
 **Shutdown steps:**
 
-1. Mark pool as shutting down. New checkout calls return `BRAID_ERR_SHUTDOWN`.
+1. Mark pool as shutting down, discard all pending reconnection entries, and
+   reject new checkout calls with `BRAID_ERR_SHUTDOWN`. No reconnect attempt
+   may begin after this point, including while draining ACTIVE connections.
 2. Cancel all pending wait queue entries — invoke callbacks with
    `BRAID_ERR_SHUTDOWN`, tombstone slots.
 3. If `drain_timeout_ms > 0`: wait up to `drain_timeout_ms` for all ACTIVE
@@ -1056,9 +1060,8 @@ No new connections are created after shutdown begins.
    have partial protocol state), then `close(fd)`.
 6. Transition all IDLE connections to `CLOSING → DEAD` — calls `destroy_fn`
    for each.
-7. Cancel all pending reconnection heap entries.
-8. Unregister all remaining fds from epoll/kqueue via `io_unwatch()`.
-9. Free all allocated structures: connection table, heaps, ring buffer,
+7. Unregister all remaining fds from epoll/kqueue via `io_unwatch()`.
+8. Free all allocated structures: connection table, heaps, ring buffer,
    `strdup`'d host string, pool struct.
 
 **Forced teardown (drain timeout expired or `drain_timeout_ms = 0` with

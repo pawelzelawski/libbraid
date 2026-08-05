@@ -334,12 +334,36 @@ reconnect_schedule_retry(braid_pool_t *pool, uint32_t attempt)
 	uint64_t now_ms;
 	uint64_t delay_ms;
 
+	if (pool->shutting_down)
+		return;
+
 	next.attempt = attempt + 1;
 	now_ms = braid_now_ms();
 	delay_ms = reconnect_backoff_delay(pool, attempt + 1);
 	next.next_retry_ms = add_sat_u64(now_ms, delay_ms);
 	reconnect_heap_push(&pool->reconnect,
 			    next); /* EXHAUSTED: best effort */
+}
+
+static void reconnect_dead_without_floor_retry(braid_pool_t *pool,
+						braid_conn_t *conn, int from_idle);
+
+/*
+ * reconnect_fail_inflight -- fail a CONNECTING/INITIALIZING reconnect while
+ * preserving its attempt count. heap_index carries that count until the
+ * connection has reached IDLE, at which point the idle heap owns the field.
+ */
+void
+reconnect_fail_inflight(braid_pool_t *pool, braid_conn_t *conn)
+{
+	uint32_t attempt = conn->heap_index;
+	int from_idle = conn->state == BRAID_STATE_IDLE;
+
+	BRAID_DEBUG_ASSERT(conn->flags & CONN_FLAG_RECONNECT_PENDING,
+			   "reconnect_fail_inflight: connection is not pending");
+	reconnect_dead_without_floor_retry(pool, conn, from_idle);
+	reconnect_schedule_retry(pool, attempt);
+	reconnect_fire_event(pool, -1, attempt, 0);
 }
 
 /*
@@ -436,6 +460,8 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 		reconnect_schedule_retry(pool, entry.attempt);
 		return BRAID_OK;
 	}
+	conn->flags |= CONN_FLAG_RECONNECT_PENDING;
+	conn->heap_index = entry.attempt;
 
 	if (immediate) {
 		/*
@@ -487,6 +513,7 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 			reconnect_fire_event(pool, -1, entry.attempt, 0);
 			return BRAID_OK;
 		}
+		conn->flags &= ~CONN_FLAG_RECONNECT_PENDING;
 	} else {
 		/*
 		 * Step 5b: EINPROGRESS — conn already in CONNECTING state
@@ -530,6 +557,11 @@ reconnect_advance(braid_pool_t *pool, uint64_t now_ms)
 {
 	braid_reconnect_entry_t entry;
 	uint32_t limit;
+
+	if (pool->shutting_down) {
+		reconnect_heap_clear(&pool->reconnect);
+		return BRAID_OK;
+	}
 
 	limit = pool->reconnect.count;
 

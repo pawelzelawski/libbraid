@@ -343,15 +343,14 @@ cleanup:
  * braid_pool_destroy — orderly teardown of all pool resources.
  *
  * Steps (see ARCHITECTURE.md §13.2):
- *   1. Mark shutting_down to suppress new reconnections.
+ *   1. Mark shutting_down and discard pending reconnections.
  *   2. Cancel all pending wait queue entries (BRAID_ERR_SHUTDOWN callbacks).
  *   3. Drain ACTIVE connections (if drain_timeout_ms > 0).
  *   4. CONNECTING → manual close, no destroy_fn, fire observe_fn.
  *   5. INITIALIZING and deferred CLOSING → conn_transition(→ DEAD).
  *   6. IDLE → conn_transition(→ CLOSING) which cascades to DEAD.
- *   7. Clear reconnection heap.
- *   8. Force-close any remaining ACTIVE fds (drain expired or drain=0).
- *   9. Free all structures.
+ *   7. Force-close any remaining ACTIVE fds (drain expired or drain=0).
+ *   8. Free all structures.
  */
 void
 braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
@@ -361,8 +360,9 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 	if (pool == NULL)
 		return;
 
-	/* Step 1: suppress new reconnections and checkout calls. */
+	/* Step 1: suppress new reconnections and discard pending attempts. */
 	pool->shutting_down = 1;
+	reconnect_heap_clear(&pool->reconnect);
 
 	/* Step 2: cancel all pending waiters under the callback protocol. */
 	pool->in_callback++;
@@ -452,11 +452,8 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 			conn_transition(pool, conn, BRAID_STATE_CLOSING);
 	}
 
-	/* Step 7: discard all pending reconnection entries. */
-	reconnect_heap_clear(&pool->reconnect);
-
 	/*
-	 * Step 8: force-close any remaining ACTIVE fds.
+	 * Step 7: force-close any remaining ACTIVE fds.
 	 * These are connections that were not checked in before the drain
 	 * timeout.  destroy_fn is not called.  See ARCHITECTURE.md §13.2.
 	 */
@@ -470,7 +467,7 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 		close(conn->fd);
 	}
 
-	/* Step 9: free all allocated structures. */
+	/* Step 8: free all allocated structures. */
 	waitq_destroy(&pool->waitq);
 	reaper_heap_destroy(&pool->idle);
 	reconnect_heap_destroy(&pool->reconnect);
@@ -731,8 +728,8 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 
 	/*
 	 * Step 2a: abort CONNECTING sockets that have exceeded
-	 * connect_timeout.  conn_transition(DEAD) handles io_unwatch,
-	 * close, live_count decrement, and reconnect entry insertion.
+	 * connect_timeout. Pending reconnects preserve their existing attempt;
+	 * other connections use the normal min_connections refill path.
 	 * Track the soonest future deadline for next_ms.
 	 */
 	for (i = 0; i < pool->table_size; i++) {
@@ -747,7 +744,10 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 		deadline_ms = conn->created_at_ms +
 			      (uint64_t)pool->config.connect_timeout;
 		if (now_ms > deadline_ms) {
-			conn_transition(pool, conn, BRAID_STATE_DEAD);
+			if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
+				reconnect_fail_inflight(pool, conn);
+			else
+				conn_transition(pool, conn, BRAID_STATE_DEAD);
 		} else {
 			if (deadline_ms < earliest_ms)
 				earliest_ms = deadline_ms;
@@ -868,7 +868,10 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &errlen) !=
 			0 ||
 		    so_error != 0) {
-			conn_transition(pool, conn, BRAID_STATE_DEAD);
+			if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
+				reconnect_fail_inflight(pool, conn);
+			else
+				conn_transition(pool, conn, BRAID_STATE_DEAD);
 			break;
 		}
 
@@ -892,18 +895,30 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 				pool_drain_deferred(pool);
 
 			if (init_rc != BRAID_OK) {
-				conn_transition(pool, conn, BRAID_STATE_DEAD);
+				if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
+					reconnect_fail_inflight(pool, conn);
+				else
+					conn_transition(pool, conn, BRAID_STATE_DEAD);
 				break;
 			}
 			if (braid_now_ms() > deadline_ms) {
-				conn_transition(pool, conn, BRAID_STATE_DEAD);
+				if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
+					reconnect_fail_inflight(pool, conn);
+				else
+					conn_transition(pool, conn, BRAID_STATE_DEAD);
 				break;
 			}
 		}
 
 		conn_transition(pool, conn, BRAID_STATE_IDLE);
-		if (io_modify(pool, fd, BRAID_IO_READ) != BRAID_OK)
-			conn_transition(pool, conn, BRAID_STATE_CLOSING);
+		if (io_modify(pool, fd, BRAID_IO_READ) != BRAID_OK) {
+			if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
+				reconnect_fail_inflight(pool, conn);
+			else
+				conn_transition(pool, conn, BRAID_STATE_CLOSING);
+		} else {
+			conn->flags &= ~CONN_FLAG_RECONNECT_PENDING;
+		}
 		break;
 	}
 

@@ -732,6 +732,33 @@ test_reconnect_advance_skips_future(void)
 	free_testpool(pool);
 }
 
+/* Shutdown must discard due retries rather than starting a new connection. */
+static void
+test_reconnect_advance_shutdown_discards_pending(void)
+{
+	braid_pool_t *pool;
+	braid_reconnect_entry_t entry;
+
+	pool = make_testpool(8, 0, "127.0.0.1", 1, NULL);
+	if (pool == NULL) {
+		CHECK("advance_shutdown: alloc", 0);
+		return;
+	}
+	entry.attempt = 2;
+	entry.next_retry_ms = 0;
+	reconnect_heap_push(&pool->reconnect, entry);
+	pool->shutting_down = 1;
+
+	reconnect_advance(pool, 1000);
+
+	CHECK("advance_shutdown: pending retry discarded",
+	      pool->reconnect.count == 0);
+	CHECK("advance_shutdown: no connection created",
+	      find_live_conn(pool) == NULL);
+
+	free_testpool(pool);
+}
+
 /*
  * observe_fn must be invoked with BRAID_EV_RECONNECT_ATTEMPT carrying the
  * correct attempt number. The max_attempts path is used to keep the test
@@ -964,6 +991,7 @@ run_reconnect_tests(void)
 	test_max_attempts_zero_retries_forever();
 	test_reconnect_advance_fires_due();
 	test_reconnect_advance_skips_future();
+	test_reconnect_advance_shutdown_discards_pending();
 	test_reconnect_attempt_event_fired();
 	test_reconnect_entry_inserted_only_on_failure();
 	test_connect_zero_fast_path_reaches_idle_without_writable_event();
