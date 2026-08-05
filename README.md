@@ -120,6 +120,21 @@ identical on both platforms.
 
 ---
 
+## Capacity and checkout behavior
+
+`min_connections` is the pool's warm baseline; `max_connections` is its hard
+limit. When a checkout with a non-zero `timeout_ms` cannot be served
+immediately, libbraid queues it and creates capacity lazily up to
+`max_connections`. Connections created for a burst are later eligible for
+normal idle reaping back toward the warm baseline.
+
+A checkout with `timeout_ms == 0` never creates capacity: it returns
+`BRAID_ERR_EXHAUSTED` when no IDLE connection is immediately available. A
+queued checkout may receive `BRAID_ERR_CONNFAIL` if a finite reconnection
+budget is exhausted and no live or scheduled connection can serve it.
+
+---
+
 ## Known limitations
 
 - **Synchronous DNS resolution.** `braid_pool_advance()` calls
