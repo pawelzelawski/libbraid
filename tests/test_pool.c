@@ -2122,6 +2122,52 @@ test_notify_reconnect_failure_preserves_backoff_attempt(void)
 	close(epfd);
 }
 
+/* An already-unregistered fd is a completed cleanup operation on every OS. */
+static void
+test_io_unwatch_absent_registration_is_ok(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	int err = 0;
+	int epfd, peer_fd;
+	int sv[2] = {-1, -1};
+
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("unwatch-absent: event fd", 0);
+		return;
+	}
+
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("unwatch-absent: create", 0);
+		close(epfd);
+		return;
+	}
+
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+	    conn_alloc(pool, sv[0], &conn) != BRAID_OK) {
+		CHECK("unwatch-absent: allocate connection", 0);
+		if (sv[0] >= 0)
+			close(sv[0]);
+		if (sv[1] >= 0)
+			close(sv[1]);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+	peer_fd = sv[1];
+
+	CHECK_ERR("unwatch-absent: io_unwatch succeeds",
+		  io_unwatch(pool, conn->fd), BRAID_OK);
+
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
 #ifndef __linux__
 /*
  * kqueue: io_modify must propagate a hard failure from the first EV_DELETE
@@ -2263,6 +2309,7 @@ run_pool_tests(void)
 	test_init_fn_elapsed_deadline_enforced();
 	test_notify_io_modify_failure_discards_connection();
 	test_notify_reconnect_failure_preserves_backoff_attempt();
+	test_io_unwatch_absent_registration_is_ok();
 #ifndef __linux__
 	test_kqueue_io_modify_delete_error_propagates();
 	test_kqueue_io_unwatch_delete_error_propagates();

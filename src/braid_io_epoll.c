@@ -10,6 +10,7 @@
  * See ARCHITECTURE.md §8.1, §15.2.
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <sys/epoll.h>
 #include <unistd.h>
@@ -78,7 +79,8 @@ io_modify(braid_pool_t *pool, int fd, uint32_t events)
 int
 io_unwatch(const braid_pool_t *pool, int fd)
 {
-	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_DEL, fd, NULL) != 0)
+	if (epoll_ctl(pool->config.event_fd, EPOLL_CTL_DEL, fd, NULL) != 0 &&
+	    errno != ENOENT)
 		return BRAID_ERR_SYSCALL;
 
 	return BRAID_OK;

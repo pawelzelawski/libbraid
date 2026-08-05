@@ -706,7 +706,9 @@ connection transitions from watching for writability (connect in progress) to
 readability (keepalive error detection while IDLE).
 
 **`io_unwatch` on Linux:** Calls `epoll_ctl(EPOLL_CTL_DEL)`. Called on every
-DEAD transition before the fd is closed.
+DEAD transition before the fd is closed. An `ENOENT` result is successful: the
+fd is already absent from the epoll instance, matching kqueue's tolerated
+missing-filter `EV_DELETE` semantics.
 
 The `event_fd` used by the abstraction layer is `pool->config.event_fd` — the
 caller's epoll or kqueue instance, passed at pool creation.
