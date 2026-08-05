@@ -188,6 +188,7 @@ typedef struct braid_ring {
 	uint32_t tail;
 	uint32_t count;
 	uint32_t cap;
+	braid_token_t next_token;
 } braid_ring_t;
 
 /*

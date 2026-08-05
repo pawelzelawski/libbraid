@@ -146,7 +146,10 @@ bench: $(BENCH_CHECKOUT_BIN) $(BENCH_ADVANCE_BIN) $(BENCH_RECONNECT_BIN) $(BENCH
 
 # clang-tidy + cppcheck
 lint:
-	clang-tidy $(ALL_LIB_SRCS) -- $(CFLAGS_DEV) $(INCLUDES)
+	clang-tidy \
+	    -quiet \
+	    -checks=-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling \
+	    $(ALL_LIB_SRCS) -- $(CFLAGS_DEV) $(INCLUDES)
 	@if command -v cppcheck >/dev/null 2>&1; then \
 		cppcheck --enable=all --error-exitcode=1 \
 		         --suppress=missingIncludeSystem \

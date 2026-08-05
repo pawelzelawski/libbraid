@@ -171,6 +171,7 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 		}
 
 		conn->flags |= CONN_FLAG_CLOSING_DEFERRED;
+		pool->deferred_work |= BRAID_DEFERRED_PROCESS_DEAD;
 		break;
 
 	case BRAID_STATE_DEAD: {

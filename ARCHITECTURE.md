@@ -787,11 +787,11 @@ After every callback invocation:
 ```c
 pool->in_callback--;
 if (pool->in_callback == 0 && pool->deferred_work != 0) {
-        braid_pool_drain_deferred(pool);
+        pool_drain_deferred(pool);
 }
 ```
 
-`braid_pool_drain_deferred()` processes the flagged operations in a defined
+`pool_drain_deferred()` processes the flagged operations in a defined
 order: `BRAID_DEFERRED_PROCESS_DEAD` first (close fds, vacate slots, insert
 reconnection entries), then `BRAID_DEFERRED_SERVE_WAITQUEUE` (serve the next
 wait queue entry, which may invoke another callback, which is safe because
@@ -819,14 +819,16 @@ typedef struct braid_waiter {
         braid_checkout_cb  cb;         /* callback to invoke when served       */
         void              *cb_ctx;     /* opaque context passed through to cb  */
         uint64_t           deadline_ms;/* absolute monotonic expiry time        */
-        braid_token_t      token;      /* opaque token, value = ring index      */
+        braid_token_t      token;      /* opaque, monotonically issued token    */
         uint32_t           flags;      /* WAITER_FLAG_TOMBSTONE for cancel      */
 } braid_waiter_t;
 ```
 
 **Ring state:** `head` and `tail` indices (uint32_t), both modulo
 `max_connections`. `tail` is the next write position; `head` is the next
-read position. `count` tracks occupied (non-tombstone) entries.
+read position. `count` tracks live (non-tombstone) entries. The physical span
+from `head` to `tail` also includes tombstones and cannot exceed capacity;
+only tombstones that reach `head` are reusable without breaking FIFO order.
 
 **Enqueue (tail):** O(1). Write to `ring[tail % capacity]`, advance tail.
 
@@ -837,27 +839,26 @@ by the ring size.
 
 ### 10.2 Tokens
 
-`braid_token_t` is uint64_t. The token value is the ring buffer index at
-which the waiter entry was written. The token is opaque to the caller — it
-must not be interpreted. Its sole valid use is as an argument to
-`braid_pool_cancel()`.
+`braid_token_t` is uint64_t. Tokens are opaque, monotonically issued values;
+they must not be interpreted. Their sole valid use is as an argument to
+`braid_pool_cancel()`. `BRAID_TOKEN_NONE` denotes that no waiter was queued
+and is always safe to cancel as a no-op.
 
-The token value is undefined if a connection was immediately available at
-checkout time (no enqueue occurred). Calling `braid_pool_cancel()` with such
-a token is a documented no-op: if the ring slot identified by the token is
-not occupied by a matching waiter (deadline and cb pointer match), cancel
-does nothing.
+When a connection is immediately available at checkout time (no enqueue
+occurred), `braid_pool_checkout()` writes `BRAID_TOKEN_NONE` when the caller
+provided a token pointer. Calling `braid_pool_cancel()` with that token is a
+documented no-op.
 
 ### 10.3 Cancellation via Tombstone
 
 `braid_pool_cancel()` locates the slot at `ring[token % capacity]` and
 verifies that the stored token value matches the provided token before
-acting. This check is mandatory — without it, a stale token whose ring
-slot has been wrapped around and reused by a new waiter would cancel the
-wrong request. If `slot.token != token`, the cancel is a no-op (the
-original waiter has already been served, timed out, or the pool was shut
-down). If the tokens match, set `WAITER_FLAG_TOMBSTONE`, invoke the
-callback with `BRAID_ERR_CANCELLED`, and decrement count.
+acting. This check is mandatory — without it, a stale token whose ring slot
+has been reused by a new waiter would cancel the wrong request. If
+`slot.token != token`, the cancel is a no-op (the original waiter has already
+been served, timed out, or the pool was shut down). If the tokens match, set
+`WAITER_FLAG_TOMBSTONE`, invoke the callback with `BRAID_ERR_CANCELLED`, and
+decrement count.
 
 One callback per checkout is guaranteed by the tombstone mechanism: once a
 slot is tombstoned, the dequeue path skips it without invoking the callback

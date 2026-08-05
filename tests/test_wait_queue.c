@@ -531,6 +531,73 @@ test_full_ring_rejects_enqueue(void)
 	free_ring(ring);
 }
 
+/*
+ * Cancelling a later entry leaves a physical tombstone behind the live head.
+ * An enqueue must not wrap and overwrite that live head; after the head is
+ * served, both its slot and the following tombstone are reclaimable.
+ */
+static void
+test_cancelled_tail_preserves_live_head(void)
+{
+	braid_ring_t *ring;
+	cb_recorder_t recA, recB, recC;
+	braid_token_t tokA, tokB, tokC;
+
+	memset(&recA, 0, sizeof(recA));
+	memset(&recB, 0, sizeof(recB));
+	memset(&recC, 0, sizeof(recC));
+	ring = make_ring(2);
+	if (ring == NULL) {
+		tests_failed++;
+		return;
+	}
+
+	CHECK_ERR("cancel-tail: enqueue A",
+		  waitq_enqueue(ring, recording_cb, &recA, 0, &tokA), BRAID_OK);
+	CHECK_ERR("cancel-tail: enqueue B",
+		  waitq_enqueue(ring, recording_cb, &recB, 0, &tokB), BRAID_OK);
+	CHECK_ERR("cancel-tail: cancel B", waitq_cancel(ring, tokB), BRAID_OK);
+	CHECK_ERR("cancel-tail: enqueue C rejected",
+		  waitq_enqueue(ring, recording_cb, &recC, 0, &tokC),
+		  BRAID_ERR_EXHAUSTED);
+	CHECK_ERR("cancel-tail: serve A", waitq_serve_head(ring, 42, NULL),
+		  BRAID_OK);
+	CHECK("cancel-tail: A served once", recA.call_count == 1);
+	CHECK("cancel-tail: A receives fd", recA.fd[0] == 42);
+	CHECK("cancel-tail: B cancelled once", recB.call_count == 1);
+	CHECK("cancel-tail: C not called", recC.call_count == 0);
+	CHECK_ERR("cancel-tail: enqueue C after reclaim",
+		  waitq_enqueue(ring, recording_cb, &recC, 0, &tokC), BRAID_OK);
+	CHECK_ERR("cancel-tail: serve C", waitq_serve_head(ring, 43, NULL),
+		  BRAID_OK);
+	CHECK("cancel-tail: C served once", recC.call_count == 1);
+	CHECK("cancel-tail: C receives fd", recC.fd[0] == 43);
+
+	free_ring(ring);
+}
+
+/* BRAID_TOKEN_NONE never identifies an uninitialised or live waiter. */
+static void
+test_none_token_is_noop(void)
+{
+	braid_ring_t *ring;
+	cb_recorder_t rec;
+
+	memset(&rec, 0, sizeof(rec));
+	ring = make_ring(2);
+	if (ring == NULL) {
+		tests_failed++;
+		return;
+	}
+
+	CHECK_ERR("none-token: cancel is no-op",
+		  waitq_cancel(ring, BRAID_TOKEN_NONE), BRAID_OK);
+	CHECK("none-token: callback not invoked", rec.call_count == 0);
+	CHECK("none-token: ring unchanged", ring->count == 0);
+
+	free_ring(ring);
+}
+
 /* ── suite entry point ───────────────────────────────────────────────── */
 
 void
@@ -548,4 +615,6 @@ run_wait_queue_tests(void)
 	test_one_callback_timeout_after_cancel();
 	test_ring_wraparound();
 	test_full_ring_rejects_enqueue();
+	test_cancelled_tail_preserves_live_head();
+	test_none_token_is_noop();
 }

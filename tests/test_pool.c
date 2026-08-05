@@ -549,6 +549,7 @@ test_checkout_immediate(void)
 	CHECK("checkout-imm: callback called once", rec.call_count == 1);
 	CHECK("checkout-imm: callback err=OK", rec.err[0] == BRAID_OK);
 	CHECK("checkout-imm: callback fd matches", rec.fd[0] == conn_fd);
+	CHECK("checkout-imm: token is NONE", tok == BRAID_TOKEN_NONE);
 
 	/* Check in to clean up. */
 	braid_pool_checkin(pool, conn_fd, BRAID_CONN_DISCARD);
@@ -1222,6 +1223,161 @@ test_checkin_from_callback(void)
 	close(epfd);
 }
 
+typedef struct {
+	braid_pool_t *pool;
+	int checkin_rc;
+} discard_from_callback_ctx_t;
+
+static void
+discard_from_checkout_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
+{
+	discard_from_callback_ctx_t *ctx = cb_ctx;
+
+	(void)conn_ctx;
+	ctx->checkin_rc = err == BRAID_OK
+				  ? braid_pool_checkin(ctx->pool, fd, BRAID_CONN_DISCARD)
+				  : BRAID_ERR_INVAL;
+}
+
+/* Discarding from a checkout callback must complete deferred DEAD work. */
+static void
+test_discard_from_callback_completes_dead(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	discard_from_callback_ctx_t ctx;
+	int err = 0;
+	int epfd, peer_fd;
+
+	reset_counters();
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("discard-reentrant: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 4);
+	cfg.destroy_fn = recording_destroy_cb;
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("discard-reentrant: create", 0);
+		close(epfd);
+		return;
+	}
+	conn = alloc_idle_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("discard-reentrant: alloc idle", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+
+	ctx.pool = pool;
+	ctx.checkin_rc = BRAID_ERR_INVAL;
+	CHECK_ERR("discard-reentrant: checkout",
+		  braid_pool_checkout(pool, 0, discard_from_checkout_cb, &ctx, NULL),
+		  BRAID_OK);
+	CHECK_ERR("discard-reentrant: checkin", ctx.checkin_rc, BRAID_OK);
+	CHECK("discard-reentrant: destroy called", g_destroy_calls == 1);
+	CHECK("discard-reentrant: live count drained", pool->live_count == 0);
+	CHECK_ERR("discard-reentrant: connection removed",
+		  table_lookup(pool, conn->fd, &conn), BRAID_ERR_INVAL);
+
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
+typedef struct {
+	braid_pool_t *pool;
+	int active_fd;
+	int calls;
+	int checkin_rc;
+} waiter_checkin_ctx_t;
+
+static void
+waiter_checkin_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
+{
+	waiter_checkin_ctx_t *ctx = cb_ctx;
+
+	(void)fd;
+	(void)conn_ctx;
+	ctx->calls++;
+	if (err == BRAID_ERR_TIMEOUT || err == BRAID_ERR_SHUTDOWN)
+		ctx->checkin_rc = braid_pool_checkin(ctx->pool, ctx->active_fd,
+						     BRAID_CONN_OK);
+}
+
+/* Timeout callbacks must not serve another waiter before expiry completes. */
+static void
+test_timeout_callback_defers_checkin_work(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+	cb_recorder_t active_rec, second_rec;
+	waiter_checkin_ctx_t first_ctx;
+	braid_token_t tok;
+	uint32_t next_ms;
+	int err = 0;
+	int epfd, peer_fd;
+
+	memset(&active_rec, 0, sizeof(active_rec));
+	memset(&second_rec, 0, sizeof(second_rec));
+	epfd = make_epoll_fd();
+	if (epfd < 0) {
+		CHECK("timeout-reentrant: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 4);
+	pool = braid_pool_create(&cfg, &err);
+	if (pool == NULL) {
+		CHECK("timeout-reentrant: create", 0);
+		close(epfd);
+		return;
+	}
+	conn = alloc_idle_conn_on_epoll(pool, &peer_fd);
+	if (conn == NULL) {
+		CHECK("timeout-reentrant: alloc idle", 0);
+		braid_pool_destroy(pool, 0);
+		close(epfd);
+		return;
+	}
+
+	braid_test_clock_ms = 1000;
+	CHECK_ERR("timeout-reentrant: acquire active",
+		  braid_pool_checkout(pool, 0, recording_checkout_cb, &active_rec,
+				      NULL), BRAID_OK);
+	first_ctx.pool = pool;
+	first_ctx.active_fd = active_rec.fd[0];
+	first_ctx.calls = 0;
+	first_ctx.checkin_rc = BRAID_ERR_INVAL;
+	tok = BRAID_TOKEN_NONE;
+	CHECK_ERR("timeout-reentrant: enqueue first",
+		  braid_pool_checkout(pool, 100, waiter_checkin_cb, &first_ctx, &tok),
+		  BRAID_OK);
+	CHECK_ERR("timeout-reentrant: enqueue second",
+		  braid_pool_checkout(pool, 100, recording_checkout_cb, &second_rec,
+				      NULL), BRAID_OK);
+	braid_test_clock_ms = 1100;
+	CHECK_ERR("timeout-reentrant: advance", braid_pool_advance(pool, &next_ms),
+		  BRAID_OK);
+	CHECK("timeout-reentrant: first timed out", first_ctx.calls == 1);
+	CHECK_ERR("timeout-reentrant: first checked in", first_ctx.checkin_rc,
+		  BRAID_OK);
+	CHECK("timeout-reentrant: second timed out", second_rec.call_count == 1);
+	CHECK("timeout-reentrant: second error is TIMEOUT",
+	      second_rec.err[0] == BRAID_ERR_TIMEOUT);
+
+	CHECK_ERR("timeout-reentrant: reacquire idle",
+		  braid_pool_checkout(pool, 0, recording_checkout_cb, &active_rec,
+				      NULL), BRAID_OK);
+	braid_pool_checkin(pool, active_rec.fd[1], BRAID_CONN_DISCARD);
+	close(peer_fd);
+	braid_pool_destroy(pool, 0);
+	close(epfd);
+}
+
 /*
  * braid_pool_advance with connect_timeout exceeded: any CONNECTING connection
  * whose created_at_ms + connect_timeout <= now_ms must transition to DEAD.
@@ -1880,6 +2036,8 @@ run_pool_tests(void)
 	test_cancel_stale_wrapped_token_noop();
 	test_exhaustion_zero_timeout();
 	test_checkin_from_callback();
+	test_discard_from_callback_completes_dead();
+	test_timeout_callback_defers_checkin_work();
 	test_shutdown_cancels_waiters();
 	test_observe_fn_null_no_crash();
 	test_validate_fn_called_above_threshold();

@@ -24,13 +24,15 @@ waitq_init(braid_ring_t *ring, uint32_t cap)
 	if (cap == 0)
 		return BRAID_ERR_INVAL;
 
-	ring->slots = malloc(cap * sizeof(braid_waiter_t));
+	ring->slots = calloc(cap, sizeof(braid_waiter_t));
 	if (ring->slots == NULL)
 		return BRAID_ERR_NOMEM;
 	ring->head = 0;
 	ring->tail = 0;
 	ring->count = 0;
 	ring->cap = cap;
+	/* Keep token % cap aligned with the first physical slot (tail == 0). */
+	ring->next_token = (braid_token_t)cap;
 	return BRAID_OK;
 }
 
@@ -45,10 +47,28 @@ waitq_destroy(braid_ring_t *ring)
 }
 
 /*
+ * waitq_discard_head_tombstones -- reclaim tombstoned physical slots that
+ * have reached the ring head. A tombstone behind a live waiter cannot be
+ * reused without overwriting a live entry or breaking FIFO order.
+ */
+static void
+waitq_discard_head_tombstones(braid_ring_t *ring)
+{
+	while (ring->head != ring->tail) {
+		const braid_waiter_t *slot =
+		    &ring->slots[ring->head % ring->cap];
+
+		if (!(slot->flags & WAITER_FLAG_TOMBSTONE))
+			break;
+		ring->head++;
+	}
+}
+
+/*
  * waitq_enqueue — append a pending checkout request to the tail of the ring.
- * Returns BRAID_ERR_EXHAUSTED if count has reached cap (ring full).
- * The token written to *token is the ring index at write time (ring->tail
- * before advance); callers pass this to waitq_cancel() to cancel the waiter.
+ * Returns BRAID_ERR_EXHAUSTED if the physical ring span has reached cap.
+ * The token written to *token is a monotonic opaque identifier; callers pass
+ * it to waitq_cancel() to cancel the waiter.
  */
 int
 waitq_enqueue(braid_ring_t *ring, braid_checkout_cb cb, void *cb_ctx,
@@ -56,16 +76,20 @@ waitq_enqueue(braid_ring_t *ring, braid_checkout_cb cb, void *cb_ctx,
 {
 	braid_waiter_t *slot;
 
-	if (ring->count >= ring->cap)
+	waitq_discard_head_tombstones(ring);
+	if (ring->tail - ring->head >= ring->cap)
 		return BRAID_ERR_EXHAUSTED;
 
 	slot = &ring->slots[ring->tail % ring->cap];
 	slot->cb = cb;
 	slot->cb_ctx = cb_ctx;
 	slot->deadline_ms = deadline_ms;
-	slot->token = ring->tail;
+	slot->token = ring->next_token;
 	slot->flags = 0;
-	*token = ring->tail;
+	*token = ring->next_token;
+	ring->next_token++;
+	if (ring->next_token == BRAID_TOKEN_NONE)
+		ring->next_token++;
 	ring->tail++;
 	ring->count++;
 	return BRAID_OK;
@@ -83,12 +107,7 @@ waitq_serve_head(braid_ring_t *ring, int fd, void *conn_ctx)
 	braid_waiter_t *slot;
 
 	/* Drain stale tombstones from the front without touching count. */
-	while (ring->count > 0) {
-		slot = &ring->slots[ring->head % ring->cap];
-		if (!(slot->flags & WAITER_FLAG_TOMBSTONE))
-			break;
-		ring->head++;
-	}
+	waitq_discard_head_tombstones(ring);
 
 	if (ring->count == 0)
 		return BRAID_OK;
@@ -111,6 +130,9 @@ int
 waitq_cancel(braid_ring_t *ring, braid_token_t token)
 {
 	braid_waiter_t *slot;
+
+	if (token == BRAID_TOKEN_NONE)
+		return BRAID_OK;
 
 	slot = &ring->slots[token % ring->cap];
 	if (slot->token != token || (slot->flags & WAITER_FLAG_TOMBSTONE))
@@ -140,7 +162,7 @@ waitq_expire_with_hook(braid_ring_t *ring, uint64_t now_ms,
 
 		/* Drain stale tombstones from the front. */
 		if (slot->flags & WAITER_FLAG_TOMBSTONE) {
-			ring->head++;
+			waitq_discard_head_tombstones(ring);
 			continue;
 		}
 

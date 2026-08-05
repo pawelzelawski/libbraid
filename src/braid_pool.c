@@ -364,8 +364,12 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 	/* Step 1: suppress new reconnections and checkout calls. */
 	pool->shutting_down = 1;
 
-	/* Step 2: cancel all pending waiters. */
+	/* Step 2: cancel all pending waiters under the callback protocol. */
+	pool->in_callback++;
 	waitq_shutdown(&pool->waitq);
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
 
 	/*
 	 * Step 3: wait for ACTIVE connections to be checked in.
@@ -501,6 +505,8 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 
 	if (pool == NULL || cb == NULL)
 		return BRAID_ERR_INVAL;
+	if (token != NULL)
+		*token = BRAID_TOKEN_NONE;
 
 	if (pool->shutting_down)
 		return BRAID_ERR_SHUTDOWN;
@@ -767,8 +773,12 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 	}
 
 	/* Step 4: expire wait queue entries and fire timeout events. */
+	pool->in_callback++;
 	waitq_expire_with_hook(&pool->waitq, now_ms,
 			       pool_waitq_timeout_event_hook, pool);
+	pool->in_callback--;
+	if (pool->in_callback == 0 && pool->deferred_work != 0)
+		pool_drain_deferred(pool);
 	{
 		/*
 		 * Walk the occupied ring span to find the soonest

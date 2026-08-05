@@ -25,6 +25,9 @@ typedef uint64_t braid_token_t;
 typedef struct braid_event braid_event_t;
 typedef uint32_t braid_event_type_t;
 
+/* No queued waiter exists for this token. Safe to pass to pool_cancel(). */
+#define BRAID_TOKEN_NONE ((braid_token_t)0)
+
 /*
  * Hook function typedefs.
  * All hooks are optional — NULL is safe on every hook field.
@@ -199,9 +202,9 @@ void braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms);
  *               caller until braid_pool_checkin() is called. When err != 0,
  *               fd is -1 and conn_ctx is NULL.
  * cb_ctx      — opaque pointer passed through to cb unchanged.
- * token       — if non-NULL and a waiter is enqueued (timeout_ms > 0 and no
- *               IDLE connection was immediately available), receives a token
- *               that can be passed to braid_pool_cancel() to cancel the wait.
+ * token       — if non-NULL, receives a cancellation token when a waiter is
+ *               enqueued. Receives BRAID_TOKEN_NONE when this call is served
+ *               immediately or fails without queueing.
  *
  * Returns BRAID_OK if a connection was immediately available (cb already
  * fired) or a waiter was enqueued. Returns BRAID_ERR_EXHAUSTED (without
@@ -234,6 +237,7 @@ int braid_pool_checkin(braid_pool_t *pool, int fd, int flags);
  *
  * pool   — owning pool.
  * token  — token received via the token output of braid_pool_checkout().
+ *          BRAID_TOKEN_NONE is always a no-op.
  *
  * If the waiter has not yet been served or timed out, cancels it and invokes
  * its callback with BRAID_ERR_CANCELLED. If the token is stale (already
