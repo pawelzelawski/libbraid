@@ -2,9 +2,9 @@
 
 ## Status Overview
 
-**Last Updated**: 2026-04-02
-**Current Phase**: Phase 8 in progress
-**Next Task**: Phase 8 COMPLETE — project at v1.0.0
+**Last Updated**: 2026-08-05
+**Current Phase**: Phase 8 complete
+**Next Task**: Post-release maintenance — project released as v1.0.0
 
 ### Phase Summary
 
@@ -350,7 +350,7 @@ checkout is guaranteed under all outcomes.
   `braid_pool_t` in `src/braid_internal.h`
 - [x] Define `BRAID_DEFERRED_SERVE_WAITQUEUE` and `BRAID_DEFERRED_PROCESS_DEAD`
   flag constants
-- [x] Implement `braid_pool_drain_deferred(pool)` stub in `src/braid_pool.c`:
+- [x] Implement `pool_drain_deferred(pool)` stub in `src/braid_pool.c`:
   processes `BRAID_DEFERRED_PROCESS_DEAD` first (no-op in this phase),
   then `BRAID_DEFERRED_SERVE_WAITQUEUE` (no-op in this phase). Full
   implementation in Phase 6. See ARCHITECTURE.md §9.2.
@@ -768,7 +768,7 @@ epoll assertions correctly skipped). All 4 CI jobs green.
 
 **Goal**: Full integration test suite passes on Linux and OpenBSD. All
 benchmarks produce baseline numbers. All quality milestones confirmed.
-README.md complete. Library is ready for a v0.1.0 release tag.
+README.md complete. Library is ready for the v1.0.0 release tag.
 
 **Prerequisite**: Phase 7 complete. All unit tests passing on all platforms.
 

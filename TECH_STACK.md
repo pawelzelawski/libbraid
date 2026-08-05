@@ -128,7 +128,7 @@ All fds are registered with `EPOLLET` (edge-triggered). libbraid uses
 `epoll_data.ptr` to carry the `braid_fd_tag_t` sentinel struct, enabling
 O(1) caller-side event routing without a separate fd lookup.
 
-### 3.5 I/O Multiplexing — OpenBSD (v2+)
+### 3.5 I/O Multiplexing — OpenBSD
 
 ```c
 #include <sys/event.h>  /* kqueue, kevent — epoll abstraction layer */
@@ -136,7 +136,7 @@ O(1) caller-side event routing without a separate fd lookup.
 ```
 
 libbraid uses the caller's kqueue instance, passed as `event_fd` in
-`braid_config_t` (v2). The kqueue translation unit maps libbraid's internal
+`braid_config_t`. The kqueue translation unit maps libbraid's internal
 `BRAID_IO_READ` / `BRAID_IO_WRITE` event flags to `EVFILT_READ` /
 `EVFILT_WRITE` filter additions and deletions via `kevent()`. The `udata`
 field of `struct kevent` carries the `braid_fd_tag_t` sentinel pointer,

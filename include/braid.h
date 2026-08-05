@@ -264,7 +264,9 @@ int braid_pool_cancel(braid_pool_t *pool, braid_token_t token);
  * timeouts. May invoke init_fn, destroy_fn, checkout callbacks, and
  * observe_fn during this call.
  *
- * braid_pool_advance() calls clock_gettime() exactly once per call.
+ * braid_pool_advance() captures a monotonic-time snapshot for its timer
+ * scans. Lifecycle transitions and hook deadline enforcement may take
+ * additional monotonic-time readings while the call is in progress.
  * May block briefly on getaddrinfo() during reconnection attempts.
  *
  * See ARCHITECTURE.md §11.

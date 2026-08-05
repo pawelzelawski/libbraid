@@ -200,8 +200,8 @@ libbraid is **not** aimed at:
 
 ## Current Status
 
-**Architecture and documentation complete.** Implementation is complete
-through Phase 7.
+**Released as v1.0.0.** Architecture, implementation, tests, benchmarks, and
+release documentation are complete through Phase 8.
 
 | Phase | Name | Status |
 |---|---|---|
@@ -214,7 +214,7 @@ through Phase 7.
 | 5 | Reconnection Engine and Idle Reaper | COMPLETE |
 | 6 | Pool Core | COMPLETE |
 | 7 | OpenBSD (kqueue) port | COMPLETE |
-| 8 | Hardening, benchmarks, and release | NOT STARTED |
+| 8 | Hardening, benchmarks, and release | COMPLETE |
 
 ## Relationship to Existing Libraries
 

@@ -367,7 +367,7 @@ types: `braid_checkout_cb`, `init_fn`, `validate_fn`, `destroy_fn`, and
 ```c
 pool->in_callback++;
 pool->config.init_fn(conn->fd, &conn->conn_ctx,
-    deadline_ms, pool->config.hook_context);
+    pool->config.hook_context, deadline_ms);
 pool->in_callback--;
 if (pool->in_callback == 0 && pool->deferred_work != 0)
 	pool_drain_deferred(pool);

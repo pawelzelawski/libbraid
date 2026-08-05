@@ -264,7 +264,7 @@ src/
 │                       #   §15.2.
 │
 ├── braid_io_kqueue.c   # OpenBSD/FreeBSD/NetBSD kqueue implementation of
-│                       #   braid_io.h. Not compiled in v1.
+│                       #   braid_io.h.
 │                       # io_watch(): kevent(EVFILT_READ or EVFILT_WRITE,
 │                       #   EV_ADD); sets udata to conn->tag.
 │                       # io_modify(): delete old filter, add new filter.
@@ -499,7 +499,7 @@ Checks: >
 | Idle reaper | Min-heap on last_active_ms | `src/braid_reaper.c` |
 | Wait queue | Ring buffer, cancel, expiry | `src/braid_waitq.c` |
 | I/O abstraction — Linux | epoll translation unit | `src/braid_io_epoll.c` |
-| I/O abstraction — kqueue | kqueue translation unit (v2) | `src/braid_io_kqueue.c` |
+| I/O abstraction — kqueue | kqueue translation unit | `src/braid_io_kqueue.c` |
 | Pool core | Public API, advance, notify | `src/braid_pool.c` |
 | Internal definitions | Shared types, assertions | `src/braid_internal.h` |
 | Public API | Embedder header | `include/braid.h` |

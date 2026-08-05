@@ -41,9 +41,9 @@ tests/
 └── test_integration.c      ← integration tests with real TCP sockets
 ```
 
-`make test` builds all test files against `libbraid.a` and runs the binary.
-This verifies that exported symbols are correct — tests do not link directly
-against source files.
+`make test` compiles the library source files and all test files into one test
+binary. `make release` separately builds `libbraid.a`, the artefact consumed
+by embedders.
 
 ### 2.2 Per-Component Test Scope
 
@@ -201,8 +201,8 @@ prevents infinite loops in failing tests.
 | CONNECTING entry sets created_at_ms | Timestamp written on CONNECTING entry |
 | CLOSING entry calls destroy_fn | destroy_fn invoked exactly once |
 | CLOSING → DEAD closes fd | fd is closed after destroy_fn returns |
-| CLOSING deferred when in_callback > 0 | CONN_FLAG_CLOSING_DEFERRED set, destroy not called yet |
-| Deferred close fires after in_callback reaches 0 | destroy_fn called after drain_deferred |
+| CLOSING deferred when in_callback > 0 | destroy_fn runs on CLOSING entry; only CLOSING → DEAD is deferred |
+| Deferred close fires after in_callback reaches 0 | Deferred CLOSING → DEAD transition closes and removes the connection |
 | DEAD entry vacates table slot | Table lookup by fd returns not-found after DEAD |
 | DEAD entry fires BRAID_EV_CONN_DESTROYED | observe_fn invoked with BRAID_EV_CONN_DESTROYED |
 
@@ -221,6 +221,8 @@ prevents infinite loops in failing tests.
 | One callback per checkout — timeout after cancel | No double invocation |
 | Ring wrap-around | Enqueue/dequeue across ring boundary works correctly |
 | Full ring rejects enqueue | Enqueue on full ring returns error |
+| Cancelled tail preserves live head | A tombstone never overwrites an older live waiter |
+| BRAID_TOKEN_NONE cancellation | Immediate-checkout token cancellation is a safe no-op |
 
 ### 3.4 Reconnection Engine (`test_reconnect.c`)
 
@@ -238,6 +240,8 @@ prevents infinite loops in failing tests.
 | reconnect_advance fires due entries | Entries with next_retry_ms <= now_ms are popped and processed |
 | reconnect_advance skips future entries | Entries with next_retry_ms > now_ms remain |
 | BRAID_EV_RECONNECT_ATTEMPT fired | observe_fn invoked with correct attempt number |
+| Pending retry survives asynchronous failure | CONNECTING failure schedules attempt + 1 |
+| Shutdown discards pending retry entries | No reconnect work begins after destroy starts |
 
 ### 3.5 Idle Reaper (`test_reaper.c`)
 
@@ -251,6 +255,7 @@ prevents infinite loops in failing tests.
 | reaper_advance respects min_connections floor | No reap when live count would drop below min |
 | reaper_advance stops when heap minimum is future | Future entries not touched |
 | next_ms computed correctly | Returns exact ms until next reap event |
+| Clock before last-active timestamp | Connection is not reaped by unsigned-underflow |
 
 ### 3.6 Pool Lifecycle (`test_pool.c`)
 
@@ -259,11 +264,15 @@ prevents infinite loops in failing tests.
 | Pool create with valid config | Returns non-NULL pool |
 | Pool create with NULL event_fd | Returns NULL, err = BRAID_ERR_INVAL |
 | Pool create with min > max | Returns NULL, err = BRAID_ERR_INVAL |
-| Pool create allocates all internal structures | No allocation failure path left untested |
+| Pool create with NULL host | Returns NULL, err = BRAID_ERR_INVAL |
+| Pool create allocates all internal structures | Create cleanup paths are inspected; allocation-failure injection is not implemented |
 | Pool destroy with no active connections | Clean teardown, no leaks |
 | Pool destroy with active connection | Active connection closed after timeout |
 | Checkout with immediately available connection | Callback invoked before checkout returns |
 | Checkout enqueues when no connection available | Token written, callback not yet invoked |
+| Queued demand grows capacity | Reconnect entries are added up to max_connections |
+| Reconnect arrival serves waiter | Oldest queued checkout receives a new IDLE connection |
+| Finite reconnect exhaustion | Pending checkouts receive BRAID_ERR_CONNFAIL |
 | Checkin with BRAID_CONN_OK | Connection transitions to IDLE, wait queue served |
 | Checkin with BRAID_CONN_DISCARD | Connection transitions to CLOSING → DEAD |
 | Checkin unrecognised fd | Returns BRAID_ERR_INVAL |
@@ -271,11 +280,14 @@ prevents infinite loops in failing tests.
 | Cancel already-fired token | No-op, no double callback |
 | Exhaustion with timeout_ms = 0 | Returns BRAID_ERR_EXHAUSTED, callback not invoked |
 | Checkin from within checkout callback | Re-entrancy: deferred work fires correctly after return |
+| Discard from checkout callback | Deferred CLOSING → DEAD work completes after callback return |
+| Timeout callback checkin | Re-entrant checkin cannot bypass timeout delivery |
 | Shutdown cancels all pending waiters | All pending callbacks invoked with BRAID_ERR_SHUTDOWN |
 | observe_fn NULL — no crash | Pool functions correctly with no observability hook |
 | validate_fn called when idle_threshold exceeded | validate_fn invoked at checkout when threshold passed |
 | validate_fn failure discards connection | Connection transitions to CLOSING → DEAD |
 | init_fn deadline exceeded | Connection transitions to DEAD |
+| Absent event registration unwatch | io_unwatch() succeeds on epoll and kqueue |
 
 ---
 
@@ -368,8 +380,9 @@ FreeBSD and NetBSD share the kqueue translation unit — spot-check on FreeBSD
 before release is recommended but not gated.
 
 All tests must pass on all platforms before any phase is declared complete.
-Platform-conditional test code is not permitted — the same test binary must
-run unmodified on Linux and OpenBSD.
+Platform-specific setup and assertions are permitted only where epoll and
+kqueue APIs differ. Every platform must exercise the same library-level
+scenario and semantic expectation.
 
 ---
 
@@ -487,18 +500,18 @@ only when the test passes cleanly with no Valgrind or ASan errors.
 | Full event sequence fires in correct order | test_integration.c | ARCHITECTURE.md §6.3 |
 | Pool destroy cleans up all fds | test_integration.c | ARCHITECTURE.md §13.2 |
 
-### Quality Milestone Gate
+### Release Verification Gates
 
 | Milestone | Confirmed by |
 |---|---|
-| M1 — hash table lookup correct under collision | test_table.c probe chain tests |
-| M2 — state machine rejects all illegal transitions | test_state_machine.c illegal transition tests |
-| M3 — one callback per checkout guaranteed | test_wait_queue.c one-callback tests |
-| M4 — backoff never overflows | test_reconnect.c overflow guard tests |
-| M5 — reaper floor respected | test_reaper.c min_connections floor tests |
-| M6 — re-entrancy: checkin from callback safe | test_pool.c re-entrancy test |
-| M7 — integration suite passes on Linux | test_integration.c all tests |
-| M8 — integration suite passes on OpenBSD | test_integration.c all tests (v2) |
+| Hash table lookup correct under collision | test_table.c probe chain tests |
+| State machine rejects all illegal transitions | test_state_machine.c illegal transition tests |
+| One callback per checkout guaranteed | test_wait_queue.c one-callback tests |
+| Backoff never overflows | test_reconnect.c overflow guard tests |
+| Reaper floor respected | test_reaper.c min_connections floor tests |
+| Re-entrancy: checkin from callback safe | test_pool.c re-entrancy test |
+| Integration suite passes on Linux | test_integration.c all tests |
+| Integration suite passes on OpenBSD | test_integration.c all tests |
 
 ---
 

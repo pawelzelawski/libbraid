@@ -136,7 +136,7 @@ condition that causes the function to return NULL.
 │  Fixed size: 2 × max_connections slots                          │
 ├─────────────────────────────────────────────────────────────────┤
 │  epoll Abstraction Layer                                        │
-│  Thin syscall wrapper — epoll (Linux v1), kqueue (OpenBSD v2+)  │
+│  Thin syscall wrapper — epoll (Linux), kqueue (BSD)             │
 │  braid_fd_tag_t sentinel struct for caller event routing        │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -536,8 +536,8 @@ Where:
 at `braid_pool_create()` time (e.g. from `getentropy()` or `arc4random()`).
 Using a process-global `random()` / `srandom()` is incorrect — it introduces
 shared mutable state between pool instances and is not multi-pool safe. The
-per-pool PRNG state is a field in `braid_pool_t`.
-implementation caps the exponent at 31 before computing `base × 2^attempt`.
+per-pool PRNG state is a field in `braid_pool_t`. The implementation caps the
+exponent at 31 before computing `base × 2^attempt`.
 The result is then clamped to `cap`, so the behaviour is correct for all
 attempt values.
 
@@ -666,9 +666,8 @@ live connections, the reaper does not reap any idle connections at all.
 The epoll abstraction layer is a thin internal interface that translates
 libbraid's fd management operations into platform-specific syscalls. It is
 not part of the public API. Its purpose is to confine all platform-specific
-code to one translation unit, enabling OpenBSD (kqueue) support to be added
-in v2 by implementing the same interface without modifying any other
-component.
+code to one translation unit; the epoll and kqueue implementations share this
+interface without modifying any other component.
 
 The interface is intentionally mechanical — it mirrors syscall semantics
 rather than imposing a higher-level model. libbraid's internal code expresses
@@ -1102,14 +1101,12 @@ monotonic time internally on receipt) or absolute monotonic milliseconds
 (hook deadlines). The distinction is documented per-parameter in the API
 reference.
 
-`clock_gettime()` is called once per `braid_pool_advance()` invocation and
-the result is reused for all comparisons within that call (reconnect heap,
-connect_timeout scan, idle reaper, wait queue expiry). It is not called on
-the `braid_pool_checkin()` or `braid_pool_cancel()` paths. It is called on
-the `braid_pool_checkout()` path only when computing a waiter deadline from
-a caller-supplied `timeout_ms`. It is not called in the hot dispatch path
-of `braid_pool_notify()` for established connections — all timer work is
-driven by `advance()`.
+`braid_pool_advance()` captures a monotonic-time snapshot at entry and uses it
+for its reconnect-heap, connect-timeout, idle-reaper, and wait-queue-expiry
+scans. Operations that occur during the call may take additional readings to
+timestamp a lifecycle transition, schedule a retry after a failure, or enforce
+a hook deadline. Checkout, checkin, and notify likewise read monotonic time
+only when their own timing work requires it.
 
 All internal absolute deadlines use saturating addition. A timeout added near
 `UINT64_MAX` therefore becomes `UINT64_MAX` rather than wrapping into the
@@ -1127,7 +1124,7 @@ All platform-specific code is confined to the epoll abstraction layer
 
 ```
 src/braid_io_epoll.c   — Linux (v1)
-src/braid_io_kqueue.c  — OpenBSD, FreeBSD, NetBSD (v2+)
+src/braid_io_kqueue.c  — OpenBSD, FreeBSD, NetBSD
 ```
 
 The build system selects the correct translation unit. No `#ifdef` for
@@ -1140,7 +1137,7 @@ registered with `EPOLLET` (edge-triggered). The epoll fd is provided by the
 caller via `config.event_fd` — libbraid does not create its own epoll
 instance.
 
-### 15.3 OpenBSD, FreeBSD, NetBSD — kqueue (v2+)
+### 15.3 OpenBSD, FreeBSD, NetBSD — kqueue
 
 kqueue uses per-event filter registration (`EVFILT_READ`, `EVFILT_WRITE`)
 rather than epoll's per-fd bitmask. The kqueue translation unit maps
@@ -1300,7 +1297,6 @@ relevant implementation phase begins.
 
 | Item | Blocks | Notes |
 |---|---|---|
-| `io_kqueue.c` kevent batch size | Phase 2 (OpenBSD) | Single-event vs batched kevent() calls — defer until kqueue phase |
 | Pool reset API | v2 | Intentionally deferred; requires full connection drain semantics |
 
 **Confirmed out-of-scope decisions (permanently excluded):**
