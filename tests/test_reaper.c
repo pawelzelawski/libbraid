@@ -524,6 +524,30 @@ cleanup:
 	free_reaper_pool(pool);
 }
 
+static void
+test_reaper_advance_clock_before_idle(void)
+{
+	braid_pool_t *pool;
+	braid_conn_t *conn;
+
+	pool = make_reaper_pool(2, 0, 100);
+	if (pool == NULL) {
+		CHECK("reaper-clock-before: pool alloc", 0);
+		return;
+	}
+	conn = alloc_idle_conn(pool, 1000);
+	if (conn == NULL) {
+		CHECK("reaper-clock-before: alloc", 0);
+		goto cleanup;
+	}
+	reaper_advance(pool, 999);
+	CHECK("reaper-clock-before: connection retained", pool->live_count == 1);
+	conn_transition(pool, conn, BRAID_STATE_CLOSING);
+
+cleanup:
+	free_reaper_pool(pool);
+}
+
 /* ── test entry point ────────────────────────────────────────────────── */
 
 void
@@ -537,4 +561,5 @@ run_reaper_tests(void)
 	test_reaper_advance_respects_floor();
 	test_reaper_advance_stops_at_future();
 	test_next_ms_computed_correctly();
+	test_reaper_advance_clock_before_idle();
 }

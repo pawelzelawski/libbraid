@@ -96,6 +96,7 @@ typedef enum {
 #define CONN_FLAG_EVER_ACTIVE 0x04u /* connection was ACTIVE at least once */
 #define CONN_FLAG_RECONNECT_PENDING                                            \
 	0x08u /* retain reconnect attempt until connection is established */
+#define CONN_FLAG_SUPPRESS_FLOOR_RETRY 0x10u /* failed reconnect owns retry */
 
 /* Wait queue entry flag bits. */
 #define WAITER_FLAG_TOMBSTONE 0x01u /* entry cancelled or served */
@@ -125,6 +126,12 @@ typedef struct braid_conn {
 	uint32_t heap_index; /* idle reaper position; reconnect attempt while pending */
 	braid_fd_tag_t tag; /* epoll sentinel — inline, no alloc needed */
 } braid_conn_t;
+
+static inline uint64_t
+braid_add_sat_u64(uint64_t a, uint64_t b)
+{
+	return b > UINT64_MAX - a ? UINT64_MAX : a + b;
+}
 
 /*
  * braid_reconnect_entry_t — one pending reconnection attempt.

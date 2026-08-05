@@ -223,7 +223,8 @@ conn_transition(braid_pool_t *pool, braid_conn_t *conn, braid_state_t new_state)
 		 * See ARCHITECTURE.md §4.3, §6.
 		 */
 		if (pool->live_count < pool->config.min_connections &&
-		    !pool->shutting_down) {
+		    !pool->shutting_down &&
+		    !(conn->flags & CONN_FLAG_SUPPRESS_FLOOR_RETRY)) {
 			braid_reconnect_entry_t entry;
 			memset(&entry, 0, sizeof(entry));
 			reconnect_heap_push(&pool->reconnect, entry);

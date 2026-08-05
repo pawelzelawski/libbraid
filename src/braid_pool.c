@@ -256,7 +256,7 @@ braid_pool_create(const braid_config_t *config, int *err)
 	uint32_t i;
 
 	/* Validate required config fields. */
-	if (config == NULL || config->event_fd < 0 ||
+	if (config == NULL || config->host == NULL || config->event_fd < 0 ||
 	    config->max_connections == 0 ||
 	    config->min_connections > config->max_connections) {
 		if (err != NULL)
@@ -418,7 +418,7 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 		struct timespec ts;
 		uint32_t next_ms;
 
-		deadline_ms = braid_now_ms() + drain_timeout_ms;
+		deadline_ms = braid_add_sat_u64(braid_now_ms(), drain_timeout_ms);
 		ts.tv_sec = 0;
 		ts.tv_nsec = 10L * 1000 * 1000; /* 10 ms */
 		while (pool_active_count(pool) > 0) {
@@ -565,7 +565,8 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 			uint64_t deadline_ms;
 			int vrc;
 
-			deadline_ms = now_ms + pool->config.validate_timeout;
+			deadline_ms = braid_add_sat_u64(
+			    now_ms, (uint64_t)pool->config.validate_timeout);
 			pool->in_callback++;
 			vrc = pool->config.validate_fn(
 			    conn->fd, conn->conn_ctx, pool->config.hook_context,
@@ -613,7 +614,7 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 		uint64_t deadline_ms;
 		int rc;
 
-		deadline_ms = now_ms + (uint64_t)timeout_ms;
+		deadline_ms = braid_add_sat_u64(now_ms, (uint64_t)timeout_ms);
 		rc = waitq_enqueue(&pool->waitq, cb, cb_ctx, deadline_ms, &tok);
 		if (rc != BRAID_OK)
 			return rc;
@@ -780,8 +781,8 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 		if (conn->state != BRAID_STATE_CONNECTING)
 			continue;
 
-		deadline_ms = conn->created_at_ms +
-			      (uint64_t)pool->config.connect_timeout;
+		deadline_ms = braid_add_sat_u64(
+		    conn->created_at_ms, (uint64_t)pool->config.connect_timeout);
 		if (now_ms > deadline_ms) {
 			if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
 				reconnect_fail_inflight(pool, conn);
@@ -804,7 +805,8 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 				 : 300000;
 
 		if (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
-			uint64_t fire_ms = entry.last_active_ms + timeout_ms;
+			uint64_t fire_ms = braid_add_sat_u64(entry.last_active_ms,
+						     timeout_ms);
 
 			if (fire_ms < earliest_ms)
 				earliest_ms = fire_ms;
@@ -924,7 +926,7 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 			timeout_ms = pool->config.init_timeout != 0
 					 ? (uint64_t)pool->config.init_timeout
 					 : 10000;
-			deadline_ms = braid_now_ms() + timeout_ms;
+			deadline_ms = braid_add_sat_u64(braid_now_ms(), timeout_ms);
 			pool->in_callback++;
 			init_rc = pool->config.init_fn(
 			    fd, &conn->conn_ctx, pool->config.hook_context,

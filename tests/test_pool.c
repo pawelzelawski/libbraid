@@ -348,6 +348,26 @@ test_pool_create_null_event_fd(void)
 	CHECK("create-null-event-fd: err == INVAL", err == BRAID_ERR_INVAL);
 }
 
+static void
+test_pool_create_null_host(void)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool;
+	int err = 0;
+	int epfd = make_epoll_fd();
+
+	if (epfd < 0) {
+		CHECK("create-null-host: event fd", 0);
+		return;
+	}
+	cfg = make_minimal_config(epfd, 4);
+	cfg.host = NULL;
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("create-null-host: pool NULL", pool == NULL);
+	CHECK("create-null-host: err == INVAL", err == BRAID_ERR_INVAL);
+	close(epfd);
+}
+
 /*
  * braid_pool_create with min_connections > max_connections returns NULL and
  * BRAID_ERR_INVAL.
@@ -2212,6 +2232,7 @@ run_pool_tests(void)
 
 	test_pool_create_valid();
 	test_pool_create_null_event_fd();
+	test_pool_create_null_host();
 	test_pool_create_min_gt_max();
 	test_api_null_argument_guards();
 	test_pool_destroy_no_active();

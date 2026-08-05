@@ -1109,6 +1109,11 @@ a caller-supplied `timeout_ms`. It is not called in the hot dispatch path
 of `braid_pool_notify()` for established connections — all timer work is
 driven by `advance()`.
 
+All internal absolute deadlines use saturating addition. A timeout added near
+`UINT64_MAX` therefore becomes `UINT64_MAX` rather than wrapping into the
+past. The idle reaper also treats a clock value earlier than `last_active_ms`
+as not yet eligible, avoiding unsigned-underflow reaps.
+
 ---
 
 ## 15. Platform Portability

@@ -209,7 +209,8 @@ reaper_advance(braid_pool_t *pool, uint64_t now_ms)
 		      : BRAID_DEFAULT_IDLE_REAP_TIMEOUT;
 
 	while (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
-		if (now_ms - entry.last_active_ms < timeout)
+		if (now_ms < entry.last_active_ms ||
+		    now_ms - entry.last_active_ms < timeout)
 			break;
 		if (pool->live_count <= pool->config.min_connections)
 			break;

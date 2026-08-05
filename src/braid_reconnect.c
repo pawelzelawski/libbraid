@@ -35,20 +35,6 @@ static int (*reconnect_test_io_watch_hook)(braid_pool_t *, int, uint32_t);
 /* ── PRNG helpers ─────────────────────────────────────────────────────── */
 
 /*
- * add_sat_u64 — saturating uint64_t addition.
- *
- * Used for reconnect scheduling and callback deadlines to avoid overflow.
- * See CODING_STANDARDS.md §6.
- */
-static uint64_t
-add_sat_u64(uint64_t a, uint64_t b)
-{
-	if (b > UINT64_MAX - a)
-		return UINT64_MAX;
-	return a + b;
-}
-
-/*
  * pool_prng_next — advance the per-pool xorshift64 PRNG and return the next
  * pseudo-random value. See ARCHITECTURE.md §6.2.
  *
@@ -340,7 +326,7 @@ reconnect_schedule_retry(braid_pool_t *pool, uint32_t attempt)
 	next.attempt = attempt + 1;
 	now_ms = braid_now_ms();
 	delay_ms = reconnect_backoff_delay(pool, attempt + 1);
-	next.next_retry_ms = add_sat_u64(now_ms, delay_ms);
+	next.next_retry_ms = braid_add_sat_u64(now_ms, delay_ms);
 	reconnect_heap_push(&pool->reconnect,
 			    next); /* EXHAUSTED: best effort */
 }
@@ -375,23 +361,11 @@ static void
 reconnect_dead_without_floor_retry(braid_pool_t *pool, braid_conn_t *conn,
 				   int from_idle)
 {
-	uint32_t saved_min;
-
-	/*
-	 * SAFETY: temporarily zero min_connections to suppress the dead-entry
-	 * refill push inside conn_transition(→ DEAD).  reconnect_attempt()
-	 * schedules its own backoff retry for this path; the automatic refill
-	 * would insert a duplicate zero-delay entry.  Restore immediately after
-	 * the transition returns — no other code must run between the zero and
-	 * the restore.  See ARCHITECTURE.md §6.3.
-	 */
-	saved_min = pool->config.min_connections;
-	pool->config.min_connections = 0;
+	conn->flags |= CONN_FLAG_SUPPRESS_FLOOR_RETRY;
 	if (from_idle)
 		conn_transition(pool, conn, BRAID_STATE_CLOSING);
 	else
 		conn_transition(pool, conn, BRAID_STATE_DEAD);
-	pool->config.min_connections = saved_min;
 }
 
 /*
@@ -481,7 +455,7 @@ reconnect_attempt(braid_pool_t *pool, braid_reconnect_entry_t entry)
 				      ? pool->config.init_timeout
 				      : BRAID_DEFAULT_INIT_TIMEOUT;
 			now_ms = braid_now_ms();
-			deadline = add_sat_u64(now_ms, (uint64_t)timeout);
+			deadline = braid_add_sat_u64(now_ms, (uint64_t)timeout);
 			pool->in_callback++;
 			init_rc = pool->config.init_fn(
 			    fd, &conn->conn_ctx, pool->config.hook_context,
