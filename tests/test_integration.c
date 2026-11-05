@@ -1289,6 +1289,7 @@ test_reconnect_after_server_restart(void)
 	checkout_rec_t c2;
 	int err = 0;
 	int i;
+	int rc;
 
 	memset(&c1, 0, sizeof(c1));
 	memset(&c2, 0, sizeof(c2));
@@ -1311,6 +1312,8 @@ test_reconnect_after_server_restart(void)
 	cfg.event_fd = event_fd;
 	cfg.min_connections = 1;
 	cfg.max_connections = 1;
+	/* Keep every retry within the 1000-step (10000 ms) recovery budget. */
+	cfg.backoff_cap = 1000;
 
 	pool = braid_pool_create(&cfg, &err);
 	CHECK("integration-restart: create pool", pool != NULL);
@@ -1318,39 +1321,63 @@ test_reconnect_after_server_restart(void)
 		goto cleanup;
 
 #ifdef BRAID_TEST_CLOCK
+	/* Seed 100 exposed the timeout with the default backoff cap. */
+	pool->prng = 100;
 	braid_test_clock_ms = 0;
 #endif
 
-	CHECK_ERR("integration-restart: warm pool",
-		  run_until_idle_at_least(pool, event_fd, 1, 500), BRAID_OK);
-	CHECK_ERR("integration-restart: checkout before stop",
-		  braid_pool_checkout(pool, 0, checkout_cb, &c1, NULL),
-		  BRAID_OK);
+	rc = run_until_idle_at_least(pool, event_fd, 1, 500);
+	CHECK_ERR("integration-restart: warm pool", rc, BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
+	rc = braid_pool_checkout(pool, 0, checkout_cb, &c1, NULL);
+	CHECK_ERR("integration-restart: checkout before stop", rc, BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
 	CHECK("integration-restart: first checkout succeeded",
 	      c1.calls == 1 && c1.err == BRAID_OK);
+	if (c1.calls != 1 || c1.err != BRAID_OK)
+		goto cleanup;
 
 	stop_test_server(server_pid);
 	server_pid = -1;
 
-	CHECK_ERR("integration-restart: discard while server down",
-		  braid_pool_checkin(pool, c1.fd, BRAID_CONN_DISCARD),
+	rc = braid_pool_checkin(pool, c1.fd, BRAID_CONN_DISCARD);
+	CHECK_ERR("integration-restart: discard while server down", rc,
 		  BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
 
-	for (i = 0; i < 200; i++)
-		event_loop_step(pool, event_fd);
+	for (i = 0; i < 200; i++) {
+		rc = event_loop_step(pool, event_fd);
+		if (rc != BRAID_OK)
+			break;
+	}
+	CHECK_ERR("integration-restart: advance while server down", rc,
+		  BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
 	CHECK("integration-restart: no idle while server down",
 	      pool_idle_count(pool) == 0);
 
-	CHECK_ERR("integration-restart: restart same port",
-		  start_test_server_on_port(&server_pid, port), BRAID_OK);
-	CHECK_ERR("integration-restart: pool recovers after restart",
-		  run_until_idle_at_least(pool, event_fd, 1, 1000), BRAID_OK);
-
-	CHECK_ERR("integration-restart: checkout after restart",
-		  braid_pool_checkout(pool, 0, checkout_cb, &c2, NULL),
+	rc = start_test_server_on_port(&server_pid, port);
+	CHECK_ERR("integration-restart: restart same port", rc, BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
+	rc = run_until_idle_at_least(pool, event_fd, 1, 1000);
+	CHECK_ERR("integration-restart: pool recovers after restart", rc,
 		  BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
+
+	rc = braid_pool_checkout(pool, 0, checkout_cb, &c2, NULL);
+	CHECK_ERR("integration-restart: checkout after restart", rc, BRAID_OK);
+	if (rc != BRAID_OK)
+		goto cleanup;
 	CHECK("integration-restart: second checkout succeeded",
 	      c2.calls == 1 && c2.err == BRAID_OK);
+	if (c2.calls != 1 || c2.err != BRAID_OK)
+		goto cleanup;
 	CHECK_ERR("integration-restart: checkin after restart",
 		  braid_pool_checkin(pool, c2.fd, BRAID_CONN_OK), BRAID_OK);
 

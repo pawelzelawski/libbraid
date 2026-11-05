@@ -317,6 +317,12 @@ configured with a real epoll fd and driven by `test_event_loop_step()`.
 | Pool with max_connections = 1, concurrent checkouts | Second checkout queued and served after checkin |
 | Pool destroy during pending reconnection | Reconnection heap cleared; no connect attempt after destroy |
 
+The server-restart scenario uses a fixed PRNG seed and caps reconnect backoff
+at 1000 ms, within its 10000 ms simulated recovery budget. The seed reproduces
+the timeout with the default backoff cap. Setup or recovery failures stop the
+scenario before subsequent operations can produce misleading failures.
+Default backoff behavior remains covered by the dedicated reconnect tests.
+
 ---
 
 ## 5. Sanitizer Testing
