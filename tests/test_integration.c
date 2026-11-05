@@ -73,6 +73,15 @@ typedef struct {
 	int timeout_cb_calls;
 } timeout_order_t;
 
+typedef struct {
+	braid_pool_t *pool;
+	checkout_rec_t first;
+	int created_calls;
+	int activating_fd;
+	int checkin_rc;
+	int destroy_calls;
+} observe_checkin_ctx_t;
+
 static uint32_t pool_idle_count(braid_pool_t *pool);
 static void stop_test_server(pid_t pid);
 
@@ -97,6 +106,32 @@ observe_cb(const braid_event_t *ev, void *cb_ctx)
 		rec->fds[rec->count] = ev->fd;
 	}
 	rec->count++;
+}
+
+static void
+observe_checkin_cb(const braid_event_t *ev, void *hook_ctx)
+{
+	observe_checkin_ctx_t *ctx = hook_ctx;
+
+	if (ev->type != BRAID_EV_CONN_CREATED)
+		return;
+	ctx->created_calls++;
+	if (ctx->created_calls != 2)
+		return;
+	ctx->activating_fd = ev->fd;
+	if (ctx->first.calls == 1 && ctx->first.err == BRAID_OK)
+		ctx->checkin_rc =
+		    braid_pool_checkin(ctx->pool, ctx->first.fd, BRAID_CONN_OK);
+}
+
+static void
+observe_checkin_destroy_cb(int fd, void *conn_ctx, void *hook_ctx)
+{
+	observe_checkin_ctx_t *ctx = hook_ctx;
+
+	(void)fd;
+	(void)conn_ctx;
+	ctx->destroy_calls++;
 }
 
 static void
@@ -884,6 +919,118 @@ test_single_connection_concurrent_checkouts(void)
 cleanup:
 	if (pool != NULL)
 		braid_pool_destroy(pool, 0);
+	if (event_fd >= 0)
+		close(event_fd);
+	stop_test_server(server_pid);
+}
+
+/*
+ * Returning the first checkout from the second connection's CONN_CREATED
+ * observer must not consume the sole remaining waiter before its handoff.
+ * Verify capacity through the public API after every borrowed fd is returned.
+ */
+static void
+test_observe_checkin_preserves_capacity(void)
+{
+	pid_t server_pid = -1;
+	uint16_t port = 0;
+	int event_fd = -1;
+	braid_config_t cfg = {0};
+	observe_checkin_ctx_t ctx = {0};
+	checkout_rec_t second = {0}, reacquired[2] = {{0}};
+	int err = 0;
+	uint32_t next_ms;
+
+	ctx.checkin_rc = BRAID_ERR_INVAL;
+#ifdef BRAID_TEST_CLOCK
+	braid_test_clock_ms = 0;
+#endif
+	if (start_test_server(&server_pid, &port) != BRAID_OK) {
+		CHECK("integration-observe-checkin: start server", 0);
+		return;
+	}
+	event_fd = make_event_fd();
+	CHECK("integration-observe-checkin: event fd", event_fd >= 0);
+	if (event_fd < 0)
+		goto cleanup;
+	cfg.host = "127.0.0.1";
+	cfg.port = port;
+	cfg.event_fd = event_fd;
+	cfg.min_connections = 2;
+	cfg.max_connections = 2;
+	cfg.observe_fn = observe_checkin_cb;
+	cfg.destroy_fn = observe_checkin_destroy_cb;
+	cfg.hook_context = &ctx;
+	ctx.pool = braid_pool_create(&cfg, &err);
+	CHECK("integration-observe-checkin: create pool", ctx.pool != NULL);
+	if (ctx.pool == NULL)
+		goto cleanup;
+	CHECK_ERR(
+	    "integration-observe-checkin: enqueue first",
+	    braid_pool_checkout(ctx.pool, 5000, checkout_cb, &ctx.first, NULL),
+	    BRAID_OK);
+	CHECK_ERR(
+	    "integration-observe-checkin: enqueue second",
+	    braid_pool_checkout(ctx.pool, 5000, checkout_cb, &second, NULL),
+	    BRAID_OK);
+	for (int i = 0; i < 200 && second.calls == 0; i++) {
+		if (event_loop_step(ctx.pool, event_fd) != BRAID_OK)
+			break;
+	}
+	CHECK("integration-observe-checkin: first callback once",
+	      ctx.first.calls == 1);
+	CHECK("integration-observe-checkin: second callback once",
+	      second.calls == 1);
+	CHECK("integration-observe-checkin: first checkout succeeded",
+	      ctx.first.err == BRAID_OK);
+	CHECK("integration-observe-checkin: second checkout succeeded",
+	      second.err == BRAID_OK);
+	CHECK("integration-observe-checkin: two creation events",
+	      ctx.created_calls == 2);
+	CHECK_ERR("integration-observe-checkin: observer checkin",
+		  ctx.checkin_rc, BRAID_OK);
+	if (ctx.first.calls != 1 || ctx.first.err != BRAID_OK ||
+	    second.calls != 1 || second.err != BRAID_OK ||
+	    ctx.checkin_rc != BRAID_OK)
+		goto cleanup;
+	CHECK("integration-observe-checkin: newly activated fd delivered",
+	      second.fd == ctx.activating_fd);
+	CHECK("integration-observe-checkin: distinct checkout fds",
+	      ctx.first.fd != second.fd);
+	CHECK_ERR("integration-observe-checkin: return second",
+		  braid_pool_checkin(ctx.pool, second.fd, BRAID_CONN_OK),
+		  BRAID_OK);
+	CHECK_ERR("integration-observe-checkin: advance after checkins",
+		  braid_pool_advance(ctx.pool, &next_ms), BRAID_OK);
+	CHECK("integration-observe-checkin: both connections idle",
+	      pool_idle_count(ctx.pool) == 2);
+	for (int i = 0; i < 2; i++) {
+		CHECK_ERR("integration-observe-checkin: reacquire capacity",
+			  braid_pool_checkout(ctx.pool, 0, checkout_cb,
+					      &reacquired[i], NULL),
+			  BRAID_OK);
+		CHECK("integration-observe-checkin: reacquire callback once",
+		      reacquired[i].calls == 1);
+		CHECK("integration-observe-checkin: reacquire succeeded",
+		      reacquired[i].err == BRAID_OK);
+	}
+	CHECK("integration-observe-checkin: distinct reacquired fds",
+	      reacquired[0].fd != reacquired[1].fd);
+	for (int i = 0; i < 2; i++) {
+		if (reacquired[i].calls == 1 && reacquired[i].err == BRAID_OK)
+			CHECK_ERR(
+			    "integration-observe-checkin: return reacquired fd",
+			    braid_pool_checkin(ctx.pool, reacquired[i].fd,
+					       BRAID_CONN_OK),
+			    BRAID_OK);
+	}
+	braid_pool_destroy(ctx.pool, 0);
+	ctx.pool = NULL;
+	CHECK("integration-observe-checkin: both destroy hooks called",
+	      ctx.destroy_calls == 2);
+
+cleanup:
+	braid_pool_destroy(ctx.pool, 0);
 	if (event_fd >= 0)
 		close(event_fd);
 	stop_test_server(server_pid);
@@ -1885,6 +2032,7 @@ run_integration_tests(void)
 	test_warm_pool_reaches_min_connections();
 	test_pool_exhausted_event_fires();
 	test_single_connection_concurrent_checkouts();
+	test_observe_checkin_preserves_capacity();
 	test_observe_event_sequence();
 	test_half_open_idle_peer_close_detected();
 	test_half_open_active_discard_replaced();

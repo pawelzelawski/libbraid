@@ -736,20 +736,26 @@ test_checkout_demand_scales_capacity(void)
 		return;
 	}
 
-	CHECK_ERR("demand-scale: queue one",
-		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
-		  BRAID_OK);
-	CHECK_ERR("demand-scale: queue two",
-		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
-		  BRAID_OK);
-	CHECK_ERR("demand-scale: queue three",
-		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
-		  BRAID_OK);
-	CHECK("demand-scale: three retries scheduled", pool->reconnect.count == 3);
-	CHECK_ERR("demand-scale: zero timeout exhausted",
-		  braid_pool_checkout(pool, 0, recording_checkout_cb, &rec, NULL),
-		  BRAID_ERR_EXHAUSTED);
-	CHECK("demand-scale: zero timeout did not schedule", pool->reconnect.count == 3);
+	CHECK_ERR(
+	    "demand-scale: queue one",
+	    braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
+	CHECK_ERR(
+	    "demand-scale: queue two",
+	    braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
+	CHECK_ERR(
+	    "demand-scale: queue three",
+	    braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
+	CHECK("demand-scale: three retries scheduled",
+	      pool->reconnect.count == 3);
+	CHECK_ERR(
+	    "demand-scale: zero timeout exhausted",
+	    braid_pool_checkout(pool, 0, recording_checkout_cb, &rec, NULL),
+	    BRAID_ERR_EXHAUSTED);
+	CHECK("demand-scale: zero timeout did not schedule",
+	      pool->reconnect.count == 3);
 
 	braid_pool_destroy(pool, 0);
 	close(epfd);
@@ -795,10 +801,12 @@ test_reconnect_arrival_serves_waiter(void)
 		close(epfd);
 		return;
 	}
-	reconnect_test_set_socket_create_hook(pool_fake_socket_create_immediate);
-	CHECK_ERR("arrival-serves: queue",
-		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
-		  BRAID_OK);
+	reconnect_test_set_socket_create_hook(
+	    pool_fake_socket_create_immediate);
+	CHECK_ERR(
+	    "arrival-serves: queue",
+	    braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
 	CHECK_ERR("arrival-serves: advance", braid_pool_advance(pool, &next_ms),
 		  BRAID_OK);
 	CHECK("arrival-serves: callback fired", rec.call_count == 1);
@@ -836,9 +844,10 @@ test_reconnect_exhaustion_fails_waiters(void)
 		close(epfd);
 		return;
 	}
-	CHECK_ERR("connfail: queue",
-		  braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
-		  BRAID_OK);
+	CHECK_ERR(
+	    "connfail: queue",
+	    braid_pool_checkout(pool, 1000, recording_checkout_cb, &rec, NULL),
+	    BRAID_OK);
 	pool->reconnect.entries[0].attempt = 1;
 	CHECK_ERR("connfail: advance", braid_pool_advance(pool, &next_ms),
 		  BRAID_OK);
@@ -1385,6 +1394,146 @@ test_checkin_from_callback(void)
 
 typedef struct {
 	braid_pool_t *pool;
+	int borrowed_fd;
+	int checkin_rc;
+	int observe_calls;
+	cb_recorder_t handoff;
+	cb_recorder_t pending;
+	int pending_calls_at_handoff;
+} observe_checkin_ctx_t;
+
+static void
+observe_checkin_cb(const braid_event_t *ev, void *hook_ctx)
+{
+	observe_checkin_ctx_t *ctx = hook_ctx;
+
+	if (ev->type != BRAID_EV_CONN_CREATED || ctx->borrowed_fd < 0)
+		return;
+	ctx->observe_calls++;
+	ctx->checkin_rc =
+	    braid_pool_checkin(ctx->pool, ctx->borrowed_fd, BRAID_CONN_OK);
+	ctx->borrowed_fd = -1;
+}
+
+static void
+observe_handoff_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
+{
+	observe_checkin_ctx_t *ctx = cb_ctx;
+
+	ctx->pending_calls_at_handoff = ctx->pending.call_count;
+	recording_checkout_cb(fd, conn_ctx, err, &ctx->handoff);
+}
+
+/*
+ * A CONN_CREATED observer returns a previously borrowed connection while
+ * another connection is being handed off. Deferred serving must wait until
+ * that handoff completes, for both queued and immediate checkouts.
+ */
+static void
+test_observe_checkin_handoff(int immediate)
+{
+	braid_config_t cfg;
+	braid_pool_t *pool = NULL;
+	braid_conn_t *conn;
+	cb_recorder_t borrowed = {0};
+	observe_checkin_ctx_t ctx = {0};
+	int event_fd, peer_a = -1, peer_b = -1;
+	int activating_fd, err = 0;
+
+	ctx.borrowed_fd = -1;
+	ctx.checkin_rc = BRAID_ERR_INVAL;
+	event_fd = make_event_fd();
+	CHECK("observe-checkin: event fd", event_fd >= 0);
+	if (event_fd < 0)
+		return;
+	cfg = make_minimal_config(event_fd, 2);
+	cfg.observe_fn = observe_checkin_cb;
+	cfg.hook_context = &ctx;
+	pool = braid_pool_create(&cfg, &err);
+	CHECK("observe-checkin: create pool", pool != NULL);
+	if (pool == NULL)
+		goto cleanup;
+	ctx.pool = pool;
+	conn = alloc_idle_conn_on_epoll(pool, &peer_a);
+	CHECK("observe-checkin: first connection", conn != NULL);
+	if (conn == NULL)
+		goto cleanup;
+	CHECK_ERR("observe-checkin: borrow first connection",
+		  braid_pool_checkout(pool, 0, recording_checkout_cb, &borrowed,
+				      NULL),
+		  BRAID_OK);
+	CHECK("observe-checkin: first callback", borrowed.call_count == 1);
+	if (borrowed.call_count != 1 || borrowed.err[0] != BRAID_OK)
+		goto cleanup;
+	ctx.borrowed_fd = borrowed.fd[0];
+
+	/* Queue before adding the second IDLE connection to the test pool. */
+	CHECK_ERR("observe-checkin: enqueue waiter",
+		  braid_pool_checkout(
+		      pool, 5000,
+		      immediate ? recording_checkout_cb : observe_handoff_cb,
+		      immediate ? (void *)&ctx.pending : (void *)&ctx, NULL),
+		  BRAID_OK);
+	conn = alloc_idle_conn_on_epoll(pool, &peer_b);
+	CHECK("observe-checkin: second connection", conn != NULL);
+	if (conn == NULL)
+		goto cleanup;
+	activating_fd = conn->fd;
+	if (immediate) {
+		CHECK_ERR("observe-checkin: immediate handoff",
+			  braid_pool_checkout(pool, 0, observe_handoff_cb, &ctx,
+					      NULL),
+			  BRAID_OK);
+	} else {
+		CHECK_ERR("observe-checkin: queued handoff",
+			  pool_serve_waiter(pool), BRAID_OK);
+	}
+	CHECK("observe-checkin: observer ran once", ctx.observe_calls == 1);
+	CHECK_ERR("observe-checkin: hook returned borrowed fd", ctx.checkin_rc,
+		  BRAID_OK);
+	CHECK("observe-checkin: handoff callback once",
+	      ctx.handoff.call_count == 1);
+	CHECK("observe-checkin: handoff succeeded",
+	      ctx.handoff.err[0] == BRAID_OK);
+	CHECK("observe-checkin: newly activated fd delivered",
+	      ctx.handoff.fd[0] == activating_fd);
+	CHECK("observe-checkin: handoff precedes deferred serving",
+	      ctx.pending_calls_at_handoff == 0);
+	CHECK("observe-checkin: pending callbacks drained",
+	      ctx.pending.call_count == immediate);
+	if (immediate) {
+		CHECK("observe-checkin: pending waiter succeeded",
+		      ctx.pending.err[0] == BRAID_OK);
+		CHECK("observe-checkin: pending waiter gets returned fd",
+		      ctx.pending.fd[0] == borrowed.fd[0]);
+	}
+	if (ctx.handoff.call_count == 1 && ctx.handoff.err[0] == BRAID_OK)
+		CHECK_ERR(
+		    "observe-checkin: return handed-off fd",
+		    braid_pool_checkin(pool, ctx.handoff.fd[0], BRAID_CONN_OK),
+		    BRAID_OK);
+	if (ctx.pending.call_count == 1 && ctx.pending.err[0] == BRAID_OK)
+		CHECK_ERR(
+		    "observe-checkin: return pending fd",
+		    braid_pool_checkin(pool, ctx.pending.fd[0], BRAID_CONN_OK),
+		    BRAID_OK);
+	CHECK("observe-checkin: both connections idle", pool->idle.count == 2);
+	CHECK("observe-checkin: wait queue empty", pool->waitq.count == 0);
+	CHECK("observe-checkin: callback guard balanced",
+	      pool->in_callback == 0);
+	CHECK("observe-checkin: deferred work empty", pool->deferred_work == 0);
+
+cleanup:
+	braid_pool_destroy(pool, 0);
+	if (peer_a >= 0)
+		close(peer_a);
+	if (peer_b >= 0)
+		close(peer_b);
+	close(event_fd);
+}
+
+typedef struct {
+	braid_pool_t *pool;
 	int checkin_rc;
 } discard_from_callback_ctx_t;
 
@@ -1394,9 +1543,10 @@ discard_from_checkout_cb(int fd, void *conn_ctx, int err, void *cb_ctx)
 	discard_from_callback_ctx_t *ctx = cb_ctx;
 
 	(void)conn_ctx;
-	ctx->checkin_rc = err == BRAID_OK
-				  ? braid_pool_checkin(ctx->pool, fd, BRAID_CONN_DISCARD)
-				  : BRAID_ERR_INVAL;
+	ctx->checkin_rc =
+	    err == BRAID_OK
+		? braid_pool_checkin(ctx->pool, fd, BRAID_CONN_DISCARD)
+		: BRAID_ERR_INVAL;
 }
 
 /* Discarding from a checkout callback must complete deferred DEAD work. */
@@ -1434,9 +1584,10 @@ test_discard_from_callback_completes_dead(void)
 
 	ctx.pool = pool;
 	ctx.checkin_rc = BRAID_ERR_INVAL;
-	CHECK_ERR("discard-reentrant: checkout",
-		  braid_pool_checkout(pool, 0, discard_from_checkout_cb, &ctx, NULL),
-		  BRAID_OK);
+	CHECK_ERR(
+	    "discard-reentrant: checkout",
+	    braid_pool_checkout(pool, 0, discard_from_checkout_cb, &ctx, NULL),
+	    BRAID_OK);
 	CHECK_ERR("discard-reentrant: checkin", ctx.checkin_rc, BRAID_OK);
 	CHECK("discard-reentrant: destroy called", g_destroy_calls == 1);
 	CHECK("discard-reentrant: live count drained", pool->live_count == 0);
@@ -1506,32 +1657,37 @@ test_timeout_callback_defers_checkin_work(void)
 
 	braid_test_clock_ms = 1000;
 	CHECK_ERR("timeout-reentrant: acquire active",
-		  braid_pool_checkout(pool, 0, recording_checkout_cb, &active_rec,
-				      NULL), BRAID_OK);
+		  braid_pool_checkout(pool, 0, recording_checkout_cb,
+				      &active_rec, NULL),
+		  BRAID_OK);
 	first_ctx.pool = pool;
 	first_ctx.active_fd = active_rec.fd[0];
 	first_ctx.calls = 0;
 	first_ctx.checkin_rc = BRAID_ERR_INVAL;
 	tok = BRAID_TOKEN_NONE;
-	CHECK_ERR("timeout-reentrant: enqueue first",
-		  braid_pool_checkout(pool, 100, waiter_checkin_cb, &first_ctx, &tok),
-		  BRAID_OK);
+	CHECK_ERR(
+	    "timeout-reentrant: enqueue first",
+	    braid_pool_checkout(pool, 100, waiter_checkin_cb, &first_ctx, &tok),
+	    BRAID_OK);
 	CHECK_ERR("timeout-reentrant: enqueue second",
-		  braid_pool_checkout(pool, 100, recording_checkout_cb, &second_rec,
-				      NULL), BRAID_OK);
-	braid_test_clock_ms = 1100;
-	CHECK_ERR("timeout-reentrant: advance", braid_pool_advance(pool, &next_ms),
+		  braid_pool_checkout(pool, 100, recording_checkout_cb,
+				      &second_rec, NULL),
 		  BRAID_OK);
+	braid_test_clock_ms = 1100;
+	CHECK_ERR("timeout-reentrant: advance",
+		  braid_pool_advance(pool, &next_ms), BRAID_OK);
 	CHECK("timeout-reentrant: first timed out", first_ctx.calls == 1);
 	CHECK_ERR("timeout-reentrant: first checked in", first_ctx.checkin_rc,
 		  BRAID_OK);
-	CHECK("timeout-reentrant: second timed out", second_rec.call_count == 1);
+	CHECK("timeout-reentrant: second timed out",
+	      second_rec.call_count == 1);
 	CHECK("timeout-reentrant: second error is TIMEOUT",
 	      second_rec.err[0] == BRAID_ERR_TIMEOUT);
 
 	CHECK_ERR("timeout-reentrant: reacquire idle",
-		  braid_pool_checkout(pool, 0, recording_checkout_cb, &active_rec,
-				      NULL), BRAID_OK);
+		  braid_pool_checkout(pool, 0, recording_checkout_cb,
+				      &active_rec, NULL),
+		  BRAID_OK);
 	braid_pool_checkin(pool, active_rec.fd[1], BRAID_CONN_DISCARD);
 	close(peer_fd);
 	braid_pool_destroy(pool, 0);
@@ -2112,7 +2268,8 @@ test_notify_reconnect_failure_preserves_backoff_attempt(void)
 
 	CHECK_ERR("notify-retry-attempt: notify",
 		  braid_pool_notify(pool, fd, BRAID_IO_WRITE), BRAID_OK);
-	CHECK("notify-retry-attempt: connection discarded", pool->live_count == 0);
+	CHECK("notify-retry-attempt: connection discarded",
+	      pool->live_count == 0);
 	CHECK_ERR("notify-retry-attempt: retry queued",
 		  reconnect_heap_peek(&pool->reconnect, &entry), BRAID_OK);
 	CHECK("notify-retry-attempt: attempt incremented", entry.attempt == 5);
@@ -2297,6 +2454,8 @@ run_pool_tests(void)
 	test_cancel_stale_wrapped_token_noop();
 	test_exhaustion_zero_timeout();
 	test_checkin_from_callback();
+	test_observe_checkin_handoff(0);
+	test_observe_checkin_handoff(1);
 	test_discard_from_callback_completes_dead();
 	test_timeout_callback_defers_checkin_work();
 	test_shutdown_cancels_waiters();

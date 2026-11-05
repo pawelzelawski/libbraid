@@ -162,8 +162,12 @@ pool_serve_waiter(braid_pool_t *pool)
 			continue;
 		}
 
-		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
+		/*
+		 * SAFETY: defer observer work until checkout delivery
+		 * completes.
+		 */
 		pool->in_callback++;
+		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
 		waitq_serve_head(&pool->waitq, conn->fd, conn->conn_ctx);
 		pool->in_callback--;
 		if (pool->in_callback == 0 && pool->deferred_work != 0)
@@ -418,7 +422,8 @@ braid_pool_destroy(braid_pool_t *pool, uint32_t drain_timeout_ms)
 		struct timespec ts;
 		uint32_t next_ms;
 
-		deadline_ms = braid_add_sat_u64(braid_now_ms(), drain_timeout_ms);
+		deadline_ms =
+		    braid_add_sat_u64(braid_now_ms(), drain_timeout_ms);
 		ts.tv_sec = 0;
 		ts.tv_nsec = 10L * 1000 * 1000; /* 10 ms */
 		while (pool_active_count(pool) > 0) {
@@ -593,8 +598,12 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 			continue;
 		}
 
-		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
+		/*
+		 * SAFETY: defer observer work until checkout delivery
+		 * completes.
+		 */
 		pool->in_callback++;
+		conn_transition(pool, conn, BRAID_STATE_ACTIVE);
 		cb(conn->fd, conn->conn_ctx, BRAID_OK, cb_ctx);
 		pool->in_callback--;
 		if (pool->in_callback == 0 && pool->deferred_work != 0)
@@ -630,7 +639,8 @@ braid_pool_checkout(braid_pool_t *pool, uint32_t timeout_ms,
 		if (pool->live_count >= pool->config.max_connections)
 			pool_fire_event(pool, BRAID_EV_POOL_EXHAUSTED);
 
-		/* Only queued checkout demand creates capacity above the warm floor. */
+		/* Only queued checkout demand creates capacity above the warm
+		 * floor. */
 		pool_schedule_demand(pool);
 	}
 
@@ -781,8 +791,9 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 		if (conn->state != BRAID_STATE_CONNECTING)
 			continue;
 
-		deadline_ms = braid_add_sat_u64(
-		    conn->created_at_ms, (uint64_t)pool->config.connect_timeout);
+		deadline_ms =
+		    braid_add_sat_u64(conn->created_at_ms,
+				      (uint64_t)pool->config.connect_timeout);
 		if (now_ms > deadline_ms) {
 			if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
 				reconnect_fail_inflight(pool, conn);
@@ -805,8 +816,8 @@ braid_pool_advance(braid_pool_t *pool, uint32_t *next_ms)
 				 : 300000;
 
 		if (reaper_heap_peek(&pool->idle, &entry) == BRAID_OK) {
-			uint64_t fire_ms = braid_add_sat_u64(entry.last_active_ms,
-						     timeout_ms);
+			uint64_t fire_ms =
+			    braid_add_sat_u64(entry.last_active_ms, timeout_ms);
 
 			if (fire_ms < earliest_ms)
 				earliest_ms = fire_ms;
@@ -926,7 +937,8 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 			timeout_ms = pool->config.init_timeout != 0
 					 ? (uint64_t)pool->config.init_timeout
 					 : 10000;
-			deadline_ms = braid_add_sat_u64(braid_now_ms(), timeout_ms);
+			deadline_ms =
+			    braid_add_sat_u64(braid_now_ms(), timeout_ms);
 			pool->in_callback++;
 			init_rc = pool->config.init_fn(
 			    fd, &conn->conn_ctx, pool->config.hook_context,
@@ -939,14 +951,16 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 				if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
 					reconnect_fail_inflight(pool, conn);
 				else
-					conn_transition(pool, conn, BRAID_STATE_DEAD);
+					conn_transition(pool, conn,
+							BRAID_STATE_DEAD);
 				break;
 			}
 			if (braid_now_ms() > deadline_ms) {
 				if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
 					reconnect_fail_inflight(pool, conn);
 				else
-					conn_transition(pool, conn, BRAID_STATE_DEAD);
+					conn_transition(pool, conn,
+							BRAID_STATE_DEAD);
 				break;
 			}
 		}
@@ -956,7 +970,8 @@ braid_pool_notify(braid_pool_t *pool, int fd, uint32_t events)
 			if (conn->flags & CONN_FLAG_RECONNECT_PENDING)
 				reconnect_fail_inflight(pool, conn);
 			else
-				conn_transition(pool, conn, BRAID_STATE_CLOSING);
+				conn_transition(pool, conn,
+						BRAID_STATE_CLOSING);
 		} else {
 			conn->flags &= ~CONN_FLAG_RECONNECT_PENDING;
 			pool_serve_waiter(pool);

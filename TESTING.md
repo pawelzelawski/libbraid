@@ -280,6 +280,7 @@ prevents infinite loops in failing tests.
 | Cancel already-fired token | No-op, no double callback |
 | Exhaustion with timeout_ms = 0 | Returns BRAID_ERR_EXHAUSTED, callback not invoked |
 | Checkin from within checkout callback | Re-entrancy: deferred work fires correctly after return |
+| Checkin from CONN_CREATED observer during queued or immediate handoff | Activating fd reaches its checkout before deferred serving; both connections return to IDLE |
 | Discard from checkout callback | Deferred CLOSING → DEAD work completes after callback return |
 | Timeout callback checkin | Re-entrant checkin cannot bypass timeout delivery |
 | Shutdown cancels all pending waiters | All pending callbacks invoked with BRAID_ERR_SHUTDOWN |
@@ -310,6 +311,7 @@ configured with a real epoll fd and driven by `test_event_loop_step()`.
 | destroy_fn graceful teardown | destroy_fn sends FIN; server receives clean close |
 | destroy_fn with unknown protocol state | destroy_fn called on BRAID_CONN_DISCARD; must not crash |
 | observe_fn event sequence | CONN_CREATED, CONN_DESTROYED, RECONNECT_ATTEMPT in correct order |
+| observe_fn checkin preserves capacity | Returning a borrowed fd during another connection's first activation does not orphan that connection; both remain usable and receive destroy_fn on teardown |
 | BRAID_EV_POOL_EXHAUSTED fires | Pool at max_connections; additional checkout fires event |
 | BRAID_EV_CHECKOUT_TIMEOUT fires | Waiter times out; event fires before callback |
 | Pool with max_connections = 1, concurrent checkouts | Second checkout queued and served after checkin |

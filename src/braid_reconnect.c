@@ -332,7 +332,8 @@ reconnect_schedule_retry(braid_pool_t *pool, uint32_t attempt)
 }
 
 static void reconnect_dead_without_floor_retry(braid_pool_t *pool,
-						braid_conn_t *conn, int from_idle);
+					       braid_conn_t *conn,
+					       int from_idle);
 
 /*
  * reconnect_fail_inflight -- fail a CONNECTING/INITIALIZING reconnect while
@@ -345,8 +346,9 @@ reconnect_fail_inflight(braid_pool_t *pool, braid_conn_t *conn)
 	uint32_t attempt = conn->heap_index;
 	int from_idle = conn->state == BRAID_STATE_IDLE;
 
-	BRAID_DEBUG_ASSERT(conn->flags & CONN_FLAG_RECONNECT_PENDING,
-			   "reconnect_fail_inflight: connection is not pending");
+	BRAID_DEBUG_ASSERT(
+	    conn->flags & CONN_FLAG_RECONNECT_PENDING,
+	    "reconnect_fail_inflight: connection is not pending");
 	reconnect_dead_without_floor_retry(pool, conn, from_idle);
 	reconnect_schedule_retry(pool, attempt);
 	reconnect_fire_event(pool, -1, attempt, 0);

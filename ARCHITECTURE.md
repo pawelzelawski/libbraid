@@ -789,6 +789,14 @@ The pool carries a `uint32_t deferred_work` bitfield:
 The pool also carries a `uint32_t in_callback` counter, incremented before
 any caller callback invocation and decremented after.
 
+For both queued and immediate checkouts, the guard spans the entire
+IDLE → ACTIVE transition and delivery to the checkout callback. The first
+ACTIVE entry can invoke `observe_fn` with `BRAID_EV_CONN_CREATED`. Work
+triggered by a checkin from that observer must remain deferred until the
+checkout callback returns;
+otherwise nested serving can consume the intended waiter and leave the newly
+ACTIVE connection without an owner.
+
 In any code path that modifies pool state and would normally trigger wait
 queue serving or DEAD processing:
 

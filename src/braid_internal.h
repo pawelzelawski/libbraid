@@ -123,7 +123,8 @@ typedef struct braid_conn {
 	uint64_t created_at_ms; /* monotonic ms, set at CONNECTING entry */
 	uint64_t last_active_ms; /* monotonic ms, updated at IDLE entry */
 	uint32_t flags; /* CONN_FLAG_* bitfield */
-	uint32_t heap_index; /* idle reaper position; reconnect attempt while pending */
+	uint32_t heap_index; /* idle reaper position; reconnect attempt while
+				pending */
 	braid_fd_tag_t tag; /* epoll sentinel — inline, no alloc needed */
 } braid_conn_t;
 

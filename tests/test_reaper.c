@@ -541,7 +541,8 @@ test_reaper_advance_clock_before_idle(void)
 		goto cleanup;
 	}
 	reaper_advance(pool, 999);
-	CHECK("reaper-clock-before: connection retained", pool->live_count == 1);
+	CHECK("reaper-clock-before: connection retained",
+	      pool->live_count == 1);
 	conn_transition(pool, conn, BRAID_STATE_CLOSING);
 
 cleanup:
